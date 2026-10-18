@@ -24,6 +24,7 @@ subprojects {
         namespace = "ru.kadrograd"
         compileSdkVersion(35)
         defaultConfig { minSdk = 21; targetSdk = 35 }
+        if (project.hasProperty("liveSources")) sourceSets.getByName("test").java.srcDir("src/liveCheck/kotlin")
         compileOptions {
             sourceCompatibility = JavaVersion.VERSION_11
             targetCompatibility = JavaVersion.VERSION_11

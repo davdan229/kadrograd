@@ -1,0 +1,80 @@
+{
+  "checked_at_utc": "2026-10-18T03:41:23.704Z",
+  "environment": "JVM with actual Kotlin adapters and Cloudstream API classes; no Android UI; no VPN configured on test host",
+  "tests": [
+    {
+      "name": "kinoVibeMovieAndCartoonMedia",
+      "seconds": 3.918,
+      "passed": true
+    },
+    {
+      "name": "kinoVibeCategoryPagination",
+      "seconds": 1.885,
+      "passed": true
+    },
+    {
+      "name": "animeVostSearchDetailsEpisodesAndMedia",
+      "seconds": 6.185,
+      "passed": true
+    },
+    {
+      "name": "kinoVibeOldAndCurrentSeriesMedia",
+      "seconds": 4.245,
+      "passed": true
+    }
+  ],
+  "media_check": {
+    "method": "HTTP GET Range; initial MP4 ftyp signature and 4096 bytes at offsets 0 and 1048576",
+    "scope": "First and last listed episodes of selected series; available qualities; selected movies. Not full playback or every catalogue entry."
+  },
+  "output": [
+    "Кадроград · KinoVibe: quality=400; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · KinoVibe: quality=400; HTTP 206; offset=1048576; bytes=4096",
+    "Матрица (1999): guest stream verified",
+    "Кадроград · KinoVibe: quality=400; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · KinoVibe: quality=400; HTTP 206; offset=1048576; bytes=4096",
+    "Король Лев (1994): guest stream verified",
+    "KinoVibe films: pages 1 and 2 distinct",
+    "KinoVibe serial: pages 1 and 2 distinct",
+    "KinoVibe cartoon: pages 1 and 2 distinct",
+    "KinoVibe anime: pages 1 and 2 distinct",
+    "Кадроград · AnimeVost: quality=720; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · AnimeVost: quality=720; HTTP 206; offset=1048576; bytes=4096",
+    "Кадроград · AnimeVost: quality=400; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · AnimeVost: quality=400; HTTP 206; offset=1048576; bytes=4096",
+    "Кадроград · AnimeVost: quality=720; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · AnimeVost: quality=720; HTTP 206; offset=1048576; bytes=4096",
+    "Кадроград · AnimeVost: quality=400; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · AnimeVost: quality=400; HTTP 206; offset=1048576; bytes=4096",
+    "Тетрадь смерти (2006): 37 published videos",
+    "Кадроград · AnimeVost: quality=720; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · AnimeVost: quality=720; HTTP 206; offset=1048576; bytes=4096",
+    "Кадроград · AnimeVost: quality=400; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · AnimeVost: quality=400; HTTP 206; offset=1048576; bytes=4096",
+    "Кадроград · AnimeVost: quality=720; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · AnimeVost: quality=720; HTTP 206; offset=1048576; bytes=4096",
+    "Кадроград · AnimeVost: quality=400; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · AnimeVost: quality=400; HTTP 206; offset=1048576; bytes=4096",
+    "Монстр (2004): 74 published videos",
+    "Кадроград · AnimeVost: quality=720; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · AnimeVost: quality=720; HTTP 206; offset=1048576; bytes=4096",
+    "Кадроград · AnimeVost: quality=400; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · AnimeVost: quality=400; HTTP 206; offset=1048576; bytes=4096",
+    "Форма голоса (2016): 1 published videos",
+    "Кадроград · KinoVibe: quality=400; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · KinoVibe: quality=400; HTTP 206; offset=1048576; bytes=4096",
+    "Кадроград · KinoVibe: quality=400; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · KinoVibe: quality=400; HTTP 206; offset=1048576; bytes=4096",
+    "Менталист 7 Сезон (2014): 12 published episodes",
+    "Кадроград · KinoVibe: quality=400; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · KinoVibe: quality=400; HTTP 206; offset=1048576; bytes=4096",
+    "Кадроград · KinoVibe: quality=400; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · KinoVibe: quality=400; HTTP 206; offset=1048576; bytes=4096",
+    "Страна шерифа 2 Сезон (2026): 2 published episodes"
+  ],
+  "limitations": [
+    "No actual Cloudstream Android playback/download verification",
+    "No access from the user Russian ISP",
+    "KinoVibe guest SD playback only; no HD-account bypass and no downloading through this source"
+  ]
+}

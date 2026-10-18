@@ -16,14 +16,18 @@ import com.lagradost.cloudstream3.plugins.Plugin
 class KadrogradPlugin : Plugin() {
     override fun load(context: Context) {
         val prefs = context.getSharedPreferences("kadrograd_settings_v1", Context.MODE_PRIVATE)
-        val defaults = linkedMapOf("rezka" to "https://hdrezka-home.tv", "filmix" to "https://filmix.gg", "libria" to "https://anilibria.top")
+        val defaults = linkedMapOf("vibe" to "https://kinovibe.cc", "libria" to "https://anilibria.top", "vost" to "https://api.animevost.org", "rezka" to "https://hdrezka-home.tv", "filmix" to "https://filmix.gg")
         fun saved(key: String) = StreamTools.origin(prefs.getString(key, defaults.getValue(key)).orEmpty()) ?: defaults.getValue(key)
         val rezka = RezkaProvider(saved("rezka"))
         val filmix = FilmixProvider(saved("filmix"))
         val libria = LibriaProvider(saved("libria"))
-        registerMainAPI(rezka)
+        val vost = VostProvider(saved("vost"))
+        val vibe = VibeProvider(saved("vibe"))
+        registerMainAPI(vibe)
+        if (prefs.getBoolean("experimental_rezka", false)) registerMainAPI(rezka)
         if (prefs.getBoolean("experimental_filmix", false)) registerMainAPI(filmix)
         registerMainAPI(libria)
+        registerMainAPI(vost)
 
         openSettings = {
             val padding = (20 * context.resources.displayMetrics.density).toInt()
@@ -34,7 +38,7 @@ class KadrogradPlugin : Plugin() {
             content.addView(TextView(context).apply {
                 text = "Адреса источников можно заменить, если сайт переехал. Укажите основной HTTPS-адрес без пути. После сохранения обновите главную страницу.\n\nОзвучки, качество и субтитры зависят от выбранного источника."
             })
-            val labels = mapOf("rezka" to "HDRezka", "filmix" to "Filmix", "libria" to "AniLibria")
+            val labels = mapOf("rezka" to "HDRezka", "filmix" to "Filmix", "libria" to "AniLibria", "vost" to "AnimeVost API", "vibe" to "KinoVibe")
             val inputs = defaults.mapValues { (key, _) ->
                 content.addView(TextView(context).apply { text = labels.getValue(key) })
                 EditText(context).apply {
@@ -43,6 +47,11 @@ class KadrogradPlugin : Plugin() {
                     setText(saved(key))
                     content.addView(this)
                 }
+            }
+            val experimentalRezka = CheckBox(context).apply {
+                text = "HDRezka: нестабильный источник (потребуется перезапуск приложения)"
+                isChecked = prefs.getBoolean("experimental_rezka", false)
+                content.addView(this)
             }
             val experimental = CheckBox(context).apply {
                 text = "Filmix: экспериментальный источник (потребуется перезапуск приложения)"
@@ -57,7 +66,9 @@ class KadrogradPlugin : Plugin() {
                     rezka.changeMirror(defaults.getValue("rezka"))
                     filmix.mainUrl = defaults.getValue("filmix")
                     libria.mainUrl = defaults.getValue("libria")
-                    Toast.makeText(context, "Адреса восстановлены", Toast.LENGTH_SHORT).show()
+                    vost.mainUrl = defaults.getValue("vost")
+                    vibe.mainUrl = defaults.getValue("vibe")
+                    Toast.makeText(context, "Адреса восстановлены. Перезапустите приложение для смены набора источников", Toast.LENGTH_LONG).show()
                 }.create()
             dialog.setOnShowListener {
                 dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
@@ -67,11 +78,14 @@ class KadrogradPlugin : Plugin() {
                     } else {
                         val editor = prefs.edit()
                         editor.putBoolean("experimental_filmix", experimental.isChecked)
+                        editor.putBoolean("experimental_rezka", experimentalRezka.isChecked)
                         values.forEach { (key, value) -> editor.putString(key, value) }
                         editor.apply()
                         rezka.changeMirror(values.getValue("rezka")!!)
                         filmix.mainUrl = values.getValue("filmix")!!
                         libria.mainUrl = values.getValue("libria")!!
+                        vost.mainUrl = values.getValue("vost")!!
+                        vibe.mainUrl = values.getValue("vibe")!!
                         dialog.dismiss()
                     }
                 }
