@@ -1,0 +1,6 @@
+{
+  "name": "Кадроград",
+  "description": "Русскоязычные источники кино, сериалов, мультфильмов и аниме для Cloudstream",
+  "manifestVersion": 1,
+  "pluginLists": ["https://raw.githubusercontent.com/davdan229/kadrograd/builds/plugins.json"]
+}

@@ -1,0 +1,39 @@
+{
+  "checked_at_utc": "2026-10-18T03:04:42.236109+00:00",
+  "scope": "HTTP diagnostics from the build host; no Android device or Russian ISP verification",
+  "sources": {
+    "AniLibria": {
+      "status": "ok",
+      "catalog_total": 1903,
+      "page_1": 24,
+      "page_2": 24,
+      "search_results": 2,
+      "sample_year": 2007,
+      "episodes": 131,
+      "stream": {
+        "playlist": true,
+        "media_bytes_sampled": 4096,
+        "media_http": 206
+      }
+    },
+    "Filmix": {
+      "status": "unverified",
+      "error": "Player returned no video translations: success"
+    },
+    "HDRezka": {
+      "status": "links_only",
+      "home_cards": 68,
+      "search_cards": 9,
+      "voiceover_nodes": 46,
+      "qualities": [
+        "360p",
+        "480p",
+        "720p",
+        "1080p",
+        "<span class=\"pjs-prem-quality\">1080p Ultra<img src=\"https://static.hdrezka.ac/templates/hdrezka/images/prem-icon.svg\" alt=\"\"></span>"
+      ],
+      "video_verified": false,
+      "stream_error": "SSLError"
+    }
+  }
+}

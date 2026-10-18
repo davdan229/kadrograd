@@ -1,0 +1,10 @@
+.gradle/
+.cloudstream/
+**/build/
+local.properties
+.idea/
+*.iml
+*.log
+__pycache__/
+.venv/
+dist/
