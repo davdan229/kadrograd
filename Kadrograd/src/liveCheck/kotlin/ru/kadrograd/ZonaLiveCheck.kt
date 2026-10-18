@@ -61,6 +61,13 @@ class ZonaLiveCheck {
             println("Verified $query ($year), type=${loaded.type}")
         }
     }
+    @Test fun liveActionMoviesFromEarlierDecades() = runBlocking {
+        for ((query,year,slug) in listOf(Triple("Назад в будущее",1985,"nazad-v-budushchee"),Triple("Терминатор 2",1991,"terminator-2-sudnyi-den"))) {
+            val loaded = api.load("${api.mainUrl}/movies/$slug") as MovieLoadResponse
+            assertEquals(year,loaded.year); assertEquals(TvType.Movie,loaded.type)
+            play(loaded.dataUrl); println("Verified $query ($year), live action movie")
+        }
+    }
     @Test fun matrixUnavailableCdnDoesNotReachPlayer() = runBlocking {
         val loaded = api.load("${api.mainUrl}/movies/matritsa") as MovieLoadResponse
         assertEquals(1999,loaded.year)

@@ -4,9 +4,10 @@
   "provider": "Zona",
   "website": "https://w1.zona.im",
   "suite": {
-    "tests": 4,
+    "tests": 5,
     "failures": 0,
-    "errors": 0
+    "errors": 0,
+    "runs": "4 initial scenarios plus an additional live-action film scenario; all passed"
   },
   "verified": [
     {
@@ -34,6 +35,16 @@
     },
     {
       "catalog": "six categories, pages 1 and 2 distinct; no year restriction"
+    },
+    {
+      "title": "Назад в будущее",
+      "year": 1985,
+      "media": "MP4 480; byte ranges 0 and 1048576"
+    },
+    {
+      "title": "Терминатор 2: Судный день",
+      "year": 1991,
+      "media": "MP4 480; byte ranges 0 and 1048576"
     }
   ],
   "unavailable": [
@@ -50,5 +61,5 @@
     "Subtitles in a live media response; contract test only",
     "Entire source catalogue and every dub"
   ],
-  "log": "Zona MP4: 480p; offset=0; bytes=4096\nZona MP4: 480p; offset=1048576; bytes=4096\nZona MP4: 720p; offset=0; bytes=4096\nZona MP4: 720p; offset=1048576; bytes=4096\nZona: 4 reachable streams; qualities=[480, 720]\nZona MP4: 480p; offset=0; bytes=4096\nZona MP4: 480p; offset=1048576; bytes=4096\nZona MP4: 720p; offset=0; bytes=4096\nZona MP4: 720p; offset=1048576; bytes=4096\nZona: 2 reachable streams; qualities=[480, 720]\nVerified Mentalist: 7 seasons, 150 episodes\nLIMITATION: Matrix catalogue exists, but supported CDN is unavailable from this checking network\nZona MP4: 480p; offset=0; bytes=4096\nZona MP4: 480p; offset=1048576; bytes=4096\nZona MP4: 720p; offset=0; bytes=4096\nZona MP4: 720p; offset=1048576; bytes=4096\nZona: 2 reachable streams; qualities=[480, 720]\nZona MP4: 480p; offset=0; bytes=4096\nZona MP4: 480p; offset=1048576; bytes=4096\nZona MP4: 720p; offset=0; bytes=4096\nZona MP4: 720p; offset=1048576; bytes=4096\nZona: 2 reachable streams; qualities=[480, 720]\nZona Фильмы: pages 1 and 2 distinct\nZona Сериалы: pages 1 and 2 distinct\nZona Мультфильмы: pages 1 and 2 distinct\nZona Мультсериалы: pages 1 and 2 distinct\nZona Аниме-фильмы: pages 1 and 2 distinct\nZona Аниме-сериалы: pages 1 and 2 distinct\nZona MP4: 480p; offset=0; bytes=4096\nZona MP4: 480p; offset=1048576; bytes=4096\nZona: 3 reachable streams; qualities=[480]\nVerified Король Лев (1994), type=Cartoon\nZona MP4: 480p; offset=0; bytes=4096\nZona MP4: 480p; offset=1048576; bytes=4096\nZona: 2 reachable streams; qualities=[480]\nVerified Форма голоса (2016), type=AnimeMovie"
+  "log": "Zona MP4: 480p; offset=0; bytes=4096\nZona MP4: 480p; offset=1048576; bytes=4096\nZona MP4: 720p; offset=0; bytes=4096\nZona MP4: 720p; offset=1048576; bytes=4096\nZona: 4 reachable streams; qualities=[480, 720]\nZona MP4: 480p; offset=0; bytes=4096\nZona MP4: 480p; offset=1048576; bytes=4096\nZona MP4: 720p; offset=0; bytes=4096\nZona MP4: 720p; offset=1048576; bytes=4096\nZona: 2 reachable streams; qualities=[480, 720]\nVerified Mentalist: 7 seasons, 150 episodes\nLIMITATION: Matrix catalogue exists, but supported CDN is unavailable from this checking network\nZona MP4: 480p; offset=0; bytes=4096\nZona MP4: 480p; offset=1048576; bytes=4096\nZona MP4: 720p; offset=0; bytes=4096\nZona MP4: 720p; offset=1048576; bytes=4096\nZona: 2 reachable streams; qualities=[480, 720]\nZona MP4: 480p; offset=0; bytes=4096\nZona MP4: 480p; offset=1048576; bytes=4096\nZona MP4: 720p; offset=0; bytes=4096\nZona MP4: 720p; offset=1048576; bytes=4096\nZona: 2 reachable streams; qualities=[480, 720]\nZona Фильмы: pages 1 and 2 distinct\nZona Сериалы: pages 1 and 2 distinct\nZona Мультфильмы: pages 1 and 2 distinct\nZona Мультсериалы: pages 1 and 2 distinct\nZona Аниме-фильмы: pages 1 and 2 distinct\nZona Аниме-сериалы: pages 1 and 2 distinct\nZona MP4: 480p; offset=0; bytes=4096\nZona MP4: 480p; offset=1048576; bytes=4096\nZona: 3 reachable streams; qualities=[480]\nVerified Король Лев (1994), type=Cartoon\nZona MP4: 480p; offset=0; bytes=4096\nZona MP4: 480p; offset=1048576; bytes=4096\nZona: 2 reachable streams; qualities=[480]\nVerified Форма голоса (2016), type=AnimeMovie\nZona MP4: 480p; offset=0; bytes=4096\nZona MP4: 480p; offset=1048576; bytes=4096\nZona: 2 reachable streams; qualities=[480]\nVerified Назад в будущее (1985), live action movie\nZona MP4: 480p; offset=0; bytes=4096\nZona MP4: 480p; offset=1048576; bytes=4096\nZona: 5 reachable streams; qualities=[480]\nVerified Терминатор 2 (1991), live action movie"
 }
