@@ -56,6 +56,7 @@ class RezkaProvider(baseUrl: String) : MainAPI() {
 
     private val http by lazy {
         Session(app.baseClient).apply {
+            defaultTimeOut = 12L
             defaultHeaders = app.defaultHeaders
             responseParser = app.responseParser
         }
@@ -171,7 +172,7 @@ class RezkaProvider(baseUrl: String) : MainAPI() {
         val pass = http.get(
             "$mainUrl$basePrefix/.within.website/x/cmd/anubis/api/pass-challenge?$q",
             referer = redir,
-            timeout = 35_000,
+            timeout = 35,
         )
         val auth = pass.cookies.keys.filter { it.contains("anubis", ignoreCase = true) }
         Log.i(
@@ -181,7 +182,7 @@ class RezkaProvider(baseUrl: String) : MainAPI() {
     }
 
     /** GET that clears Anubis via homepage auth cookie when challenged. */
-    private suspend fun fetchDocument(url: String, timeout: Long = 20_000): Document {
+    private suspend fun fetchDocument(url: String, timeout: Long = 20): Document {
         var resp = http.get(url, timeout = timeout)
         syncMainUrl(resp.url)
         var html = resp.text
@@ -251,7 +252,7 @@ class RezkaProvider(baseUrl: String) : MainAPI() {
             if (e is CancellationException) throw e
                     mainUrl
                 }
-                var home = http.get("$host/", timeout = 12_000)
+                var home = http.get("$host/", timeout = 5)
                 syncMainUrl(home.url)
                 if (isAnubisChallenge(home.text)) {
                     passAnubisChallenge(home.text, redir = "$mainUrl/")
@@ -281,12 +282,12 @@ class RezkaProvider(baseUrl: String) : MainAPI() {
         for (mirror in (listOf(mainUrl) + MIRRORS).distinct()) {
             try {
                 val base = mirror.trimEnd('/')
-                var resp = http.get(base, timeout = 12_000)
+                var resp = http.get(base, timeout = 5)
                 syncMainUrl(resp.url)
                 var html = resp.text
                 if (isAnubisChallenge(html)) {
                     passAnubisChallenge(html, redir = "$mainUrl/")
-                    resp = http.get(mainUrl, timeout = 12_000)
+                    resp = http.get(mainUrl, timeout = 5)
                     syncMainUrl(resp.url)
                     html = resp.text
                 }
@@ -670,7 +671,7 @@ class RezkaProvider(baseUrl: String) : MainAPI() {
                                 "is_camrip" to server.camrip, "is_ads" to server.ads, "is_director" to server.director,
                                 "season" to res.season, "episode" to res.episode, "action" to res.action)
                                 .filterValues { it != null }.mapValues { it.value!! },
-                            referer = res.ref, timeout = 15_000).parsedSafe<Sources>()
+                            referer = res.ref, timeout = 15).parsedSafe<Sources>()
                         if (result != null) emitLock.withLock {
                             invokeSources(server.translator_name ?: "HDRezka", result.url,
                                 result.subtitle?.toString().orEmpty(), emitSub, emit)

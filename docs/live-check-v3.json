@@ -1,0 +1,98 @@
+{
+  "checked_at_utc": "2026-10-18T04:05:21.335Z",
+  "environment": "JVM, actual Kotlin adapters. Different network from the user phone. No Android UI.",
+  "tests": [
+    {
+      "name": "kinoVibeMovieAndCartoonMedia",
+      "passed": true,
+      "seconds": 4.191
+    },
+    {
+      "name": "kinoVibeCategoryPagination",
+      "passed": true,
+      "seconds": 2.032
+    },
+    {
+      "name": "animeVostSearchDetailsEpisodesAndMedia",
+      "passed": true,
+      "seconds": 20.675
+    },
+    {
+      "name": "kinoVibeOldAndCurrentSeriesMedia",
+      "passed": true,
+      "seconds": 4.753
+    }
+  ],
+  "unit_tests": {
+    "tests": 39,
+    "passed": 39
+  },
+  "animevost_transport": "Official web mirror https://v14.vost.pw; no API hostname in production DEX",
+  "user_network_evidence": {
+    "mirror_in_phone_browser_without_vpn": true,
+    "kinovibe_in_phone_browser_without_vpn": false,
+    "updated_android_plugin_playback_without_vpn": "Not yet verified"
+  },
+  "output": [
+    "Кадроград · KinoVibe: quality=400; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · KinoVibe: quality=400; HTTP 206; offset=1048576; bytes=4096",
+    "Матрица (1999): guest stream verified",
+    "Кадроград · KinoVibe: quality=400; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · KinoVibe: quality=400; HTTP 206; offset=1048576; bytes=4096",
+    "Король Лев (1994): guest stream verified",
+    "KinoVibe films: pages 1 and 2 distinct",
+    "KinoVibe serial: pages 1 and 2 distinct",
+    "KinoVibe cartoon: pages 1 and 2 distinct",
+    "KinoVibe anime: pages 1 and 2 distinct",
+    "Кадроград · AnimeVost: quality=720; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · AnimeVost: quality=720; HTTP 206; offset=1048576; bytes=4096",
+    "Кадроград · AnimeVost: quality=720; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · AnimeVost: quality=720; HTTP 206; offset=1048576; bytes=4096",
+    "Кадроград · AnimeVost: quality=480; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · AnimeVost: quality=480; HTTP 206; offset=1048576; bytes=4096",
+    "Кадроград · AnimeVost: quality=480; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · AnimeVost: quality=480; HTTP 206; offset=1048576; bytes=4096",
+    "Кадроград · AnimeVost: quality=720; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · AnimeVost: quality=720; HTTP 206; offset=1048576; bytes=4096",
+    "Кадроград · AnimeVost: quality=720; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · AnimeVost: quality=720; HTTP 206; offset=1048576; bytes=4096",
+    "Кадроград · AnimeVost: quality=480; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · AnimeVost: quality=480; HTTP 206; offset=1048576; bytes=4096",
+    "Кадроград · AnimeVost: quality=480; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · AnimeVost: quality=480; HTTP 206; offset=1048576; bytes=4096",
+    "Тетрадь смерти (2006): 37 published videos",
+    "Кадроград · AnimeVost: quality=720; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · AnimeVost: quality=720; HTTP 206; offset=1048576; bytes=4096",
+    "Кадроград · AnimeVost: quality=480; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · AnimeVost: quality=480; HTTP 206; offset=1048576; bytes=4096",
+    "Кадроград · AnimeVost: quality=720; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · AnimeVost: quality=720; HTTP 206; offset=1048576; bytes=4096",
+    "Кадроград · AnimeVost: quality=480; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · AnimeVost: quality=480; HTTP 206; offset=1048576; bytes=4096",
+    "Монстр (2004): 74 published videos",
+    "Кадроград · AnimeVost: quality=720; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · AnimeVost: quality=720; HTTP 206; offset=1048576; bytes=4096",
+    "Кадроград · AnimeVost: quality=720; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · AnimeVost: quality=720; HTTP 206; offset=1048576; bytes=4096",
+    "Кадроград · AnimeVost: quality=480; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · AnimeVost: quality=480; HTTP 206; offset=1048576; bytes=4096",
+    "Кадроград · AnimeVost: quality=480; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · AnimeVost: quality=480; HTTP 206; offset=1048576; bytes=4096",
+    "Форма голоса (2016): 1 published videos",
+    "Кадроград · KinoVibe: quality=400; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · KinoVibe: quality=400; HTTP 206; offset=1048576; bytes=4096",
+    "Кадроград · KinoVibe: quality=400; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · KinoVibe: quality=400; HTTP 206; offset=1048576; bytes=4096",
+    "Менталист 7 Сезон (2014): 12 published episodes",
+    "Кадроград · KinoVibe: quality=400; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · KinoVibe: quality=400; HTTP 206; offset=1048576; bytes=4096",
+    "Кадроград · KinoVibe: quality=400; HTTP 206; offset=0; bytes=4096",
+    "Кадроград · KinoVibe: quality=400; HTTP 206; offset=1048576; bytes=4096",
+    "Страна шерифа 2 Сезон (2026): 2 published episodes"
+  ],
+  "limits": [
+    "Fragment checks, not full decoding or downloading",
+    "No claim of universal catalogue coverage",
+    "KinoVibe off by default because unavailable in the user network"
+  ]
+}

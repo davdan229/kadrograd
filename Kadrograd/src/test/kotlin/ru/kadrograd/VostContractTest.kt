@@ -13,76 +13,95 @@ import org.junit.Test
 class VostContractTest {
     private lateinit var server: MockWebServer
     private lateinit var provider: VostProvider
-    private var reply: (RecordedRequest) -> Pair<Int, String> = { 404 to "{}" }
     private val requests = mutableListOf<RecordedRequest>()
+    private var reply: (RecordedRequest) -> Pair<Int, String> = { 404 to "" }
     @Before fun start() {
         server = MockWebServer()
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
                 requests += request
                 val (code, body) = reply(request)
-                return MockResponse.Builder().code(code).addHeader("Content-Type", "application/json; charset=utf-8").body(body).build()
+                return MockResponse.Builder().code(code).body(body).build()
             }
         }
         server.start()
         provider = VostProvider(server.url("/").toString().trimEnd('/'))
     }
     @After fun stop() { server.close() }
-    private fun detail(type: String = "ТВ", id: Int = 154) = """{"state":{"status":"ok"},"data":[{
-        "id":$id,"title":"Тетрадь Смерти / Death Note [1-37 из 37]","year":"2006","type":"$type"}]}"""
-    private fun episodes(token: String = "one") = """[
-        {"name":"1 серия","hd":"http://video.animetop.info/720/101.mp4?token=$token","std":"http://video.animetop.info/101.mp4"},
-        {"name":"2 серия","hd":"https://video.animetop.info/720/102.mp4"}]"""
-    @Test fun cyrillicSearchUsesFormPostAndPreservesCorrectReleaseYear() = runBlocking {
-        reply = { 200 to detail() }
-        val results = provider.search("Тетрадь смерти & мир")
-        assertEquals(2006, (results.single() as AnimeSearchResponse).year)
+    private fun release(type: String = "ТВ", id: Int = 154) = """
+        <input name="story"><div class="global_search"></div><div class="shortstory"><div class="shortstoryHead"><h2>
+        <a href="/tip/tv/$id-death-note.html">Тетрадь Смерти / Death Note</a></h2></div>
+        <div class="shortstoryContent"><img src="/poster.jpg"><p><strong>Год выхода: </strong>2006</p>
+        <p><strong>Тип: </strong>$type</p><div id="ratig-layer-$id"></div></div></div>
+        <script>var data = {"1 серия":"101","2 серия":"102",};</script>
+    """
+    private fun setup(frame: String = """{"file":"${provider.mainUrl}/720/101.mp4?token=fresh"}""") {
+        reply = { req -> 200 to when {
+            req.url.encodedPath == "/frame5.php" -> frame
+            req.url.encodedPath.endsWith(".mp4") -> "\u0000\u0000\u0000 ftypisom"
+            else -> release()
+        } }
+    }
+    @Test fun webSearchPostsCyrillicToMirrorWithoutCallingApi() = runBlocking {
+        reply = { 200 to release() }
+        val found = provider.search("Тетрадь смерти & мир").single() as AnimeSearchResponse
+        assertEquals(2006, found.year)
+        assertTrue(found.url.endsWith("index.php?newsid=154"))
         assertEquals("POST", requests.single().method)
         assertTrue(requests.single().body!!.utf8().contains("%26"))
+        assertTrue(requests.single().body!!.utf8().contains("titleonly=3"))
+        assertEquals("/index.php", requests.single().url.encodedPath)
     }
-    @Test fun catalogTraversesFullIndexUsingCountRatherThanCurrentYear() = runBlocking {
-        reply = { 200 to """{"state":{"status":"ok","page":2,"count":3610},"data":[]} """ }
-        assertTrue(provider.getMainPage(2, MainPageRequest("Каталог", "last", false)).hasNext)
-        assertTrue(requests.single().url.toString().contains("page=2&quantity=24"))
+    @Test fun catalogPaginationUsesMirrorPagesAndCorrectRelativePoster() = runBlocking {
+        reply = { 200 to release() + """<a href="/page/3/">3</a>""" }
+        val result = provider.getMainPage(2, MainPageRequest("Каталог", "all", false))
+        assertTrue(result.hasNext)
+        assertEquals("/page/2/", requests.single().url.encodedPath)
+        assertEquals("${provider.mainUrl}/poster.jpg", result.items.single().list.single().posterUrl)
     }
-    @Test fun playbackRefreshesUrlsAndKeepsEpisodeIdentityWhenPlaylistReorders() = runBlocking {
-        var count = 0
-        reply = { req -> 200 to if (req.url.encodedPath.endsWith("/info")) detail() else {
-            count++
-            if (count == 1) episodes() else """[{"name":"2 серия","hd":"https://video.animetop.info/720/102.mp4"},
-                {"name":"1 серия","hd":"http://video.animetop.info/720/101.mp4?token=fresh"}]"""
-        } }
-        val loaded = provider.load("${provider.mainUrl}/v1/info?id=154") as AnimeLoadResponse
-        val ep = loaded.episodes[DubStatus.Dubbed]!!.first()
-        assertFalse(ep.data.contains("token="))
+    @Test fun oldApiCardAndEpisodeReferencesUseMirrorAndFreshPlayer() = runBlocking {
+        setup()
+        val loaded = provider.load("https://api.animevost.org/v1/info?id=154") as AnimeLoadResponse
+        assertEquals(2, loaded.episodes.getValue(DubStatus.Dubbed).size)
+        val data = loaded.episodes.getValue(DubStatus.Dubbed).first().data
+        assertFalse(data.contains("token="))
         val links = mutableListOf<ExtractorLink>()
-        assertTrue(provider.loadLinks(ep.data, false, {}, links::add))
-        assertEquals("https://video.animetop.info/720/101.mp4?token=fresh", links.single().url)
+        assertTrue(provider.loadLinks(data, false, {}, links::add))
+        assertTrue(links.single().url.contains("token=fresh"))
         assertEquals(720, links.single().quality)
+        assertTrue(requests.any { it.headers["Range"] == "bytes=0-31" })
+        assertFalse(requests.any { it.url.encodedPath.startsWith("/v1/") })
     }
-    @Test fun missingEpisodeDoesNotOpenDifferentEpisode() = runBlocking {
-        reply = { 200 to episodes() }
+    @Test fun inaccessibleMediaIsNotSentToPlayer() = runBlocking {
+        setup()
+        val original = reply
+        reply = { req -> if (req.url.encodedPath.endsWith(".mp4")) 403 to "Forbidden" else original(req) }
         val links = mutableListOf<ExtractorLink>()
-        assertFalse(provider.loadLinks(VostProvider.EpisodeRef(154, "999.mp4").toJson(), false, {}, links::add))
+        try { provider.loadLinks(VostProvider.EpisodeRef(154, "101.mp4").toJson(), false, {}, links::add); fail("Blocked CDN") }
+        catch (expected: ErrorLoadingException) { assertTrue(expected.message.orEmpty().contains("видеосерверов")) }
         assertTrue(links.isEmpty())
     }
-    @Test fun movieUsesMovieCardAndSingleVideo() = runBlocking {
-        reply = { req -> 200 to if (req.url.encodedPath.endsWith("/info")) detail("полнометражный фильм")
-            else """[{"name":"Фильм","hd":"https://video.animetop.info/720/101.mp4"}]""" }
-        val loaded = provider.load("${provider.mainUrl}/v1/info?id=154")
-        assertTrue(loaded is MovieLoadResponse)
-        assertEquals(TvType.AnimeMovie, loaded.type)
+    @Test fun missingEpisodeCannotBecomeAnotherEpisode() = runBlocking {
+        setup()
+        try { provider.loadLinks(VostProvider.EpisodeRef(154, "999.mp4").toJson(), false, {}, {}); fail("Missing episode") }
+        catch (expected: ErrorLoadingException) { assertTrue(requests.none { it.url.encodedPath == "/frame5.php" }) }
     }
-    @Test fun failedApiAndChangedSchemaAreVisibleErrors() = runBlocking {
-        for ((code, body) in listOf(503 to "{}", 200 to "{}", 200 to """{"state":{"status":"fail"},"data":[]}""")) {
-            reply = { code to body }
-            try { provider.search("пример"); fail("Must report failure") }
-            catch (expected: ErrorLoadingException) { assertTrue(expected.message.orEmpty().startsWith("AnimeVost:")) }
-        }
-    }
-    @Test fun wrongReleaseFromServerIsRejected() = runBlocking {
-        reply = { 200 to detail(id = 999) }
-        try { provider.load("${provider.mainUrl}/v1/info?id=154"); fail("Wrong title") }
+    @Test fun movieAndWrongReleaseAreDistinguished() = runBlocking {
+        reply = { 200 to release("полнометражный фильм").replace("\"2 серия\":\"102\",", "") }
+        assertTrue(provider.load("${provider.mainUrl}/index.php?newsid=154") is MovieLoadResponse)
+        reply = { 200 to release(id = 999) }
+        try { provider.load("${provider.mainUrl}/index.php?newsid=154"); fail("Wrong release") }
         catch (expected: ErrorLoadingException) { assertTrue(expected.message.orEmpty().contains("не найден")) }
+    }
+    @Test fun candidatesKeepOnlySelectedEpisodeAndDontInventQualityUrls() {
+        val found = provider.candidates("""{"file":"[HD]https://cdn.example/720/101.mp4?a=1 or https://cdn.example/720/101.mp4?a=2"}
+            var ad='https://ads.example/999.mp4'; var sd='https://other.example/101.mp4';""", "101")
+        assertEquals(listOf("https://cdn.example/720/101.mp4?a=1", "https://other.example/101.mp4"), found)
+    }
+    @Test fun searchIncludesOldTitlesFromSecondResultPage() = runBlocking {
+        reply = { req -> 200 to if (req.body!!.utf8().contains("search_start=2")) release(id = 2727)
+            else release() + """<div class="global_search">найдено 18 ответов</div>""" }
+        assertEquals(2, provider.search("Монстр").size)
+        assertEquals(2, requests.size)
     }
 }

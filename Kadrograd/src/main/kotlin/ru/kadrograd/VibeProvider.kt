@@ -42,7 +42,7 @@ class VibeProvider(baseUrl: String) : MainAPI() {
         }
     }
     private suspend fun document(url: String): Document {
-        val response = app.get(url, timeout = 20_000)
+        val response = SourceHttp.get("KinoVibe", url)
         if (response.code !in 200..299) throw ErrorLoadingException("KinoVibe: сервер вернул HTTP ${response.code}")
         return response.document
     }
@@ -57,8 +57,8 @@ class VibeProvider(baseUrl: String) : MainAPI() {
     }
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.isBlank()) return emptyList()
-        val raw = app.post("$mainUrl/index.php?do=search", data = mapOf("do" to "search", "subaction" to "search",
-            "search_start" to "0", "full_search" to "0", "result_from" to "1", "story" to query.trim()), timeout = 20_000)
+        val raw = SourceHttp.post("KinoVibe", "$mainUrl/index.php?do=search", data = mapOf("do" to "search", "subaction" to "search",
+            "search_start" to "0", "full_search" to "0", "result_from" to "1", "story" to query.trim()))
         if (raw.code !in 200..299) throw ErrorLoadingException("KinoVibe: поиск вернул HTTP ${raw.code}")
         val doc = raw.document
         if (doc.select("form#quicksearch").isEmpty()) throw ErrorLoadingException("KinoVibe: поиск недоступен")
@@ -81,7 +81,7 @@ class VibeProvider(baseUrl: String) : MainAPI() {
         val file = playerFile(doc)
         if (!file.substringBefore('?').endsWith(".txt"))
             return if (guestStreams(file).isEmpty()) emptyList() else listOf(Entry("Фильм", file))
-        val raw = app.get(fixUrl(file), referer = ref, timeout = 20_000)
+        val raw = SourceHttp.get("KinoVibe", fixUrl(file), referer = ref)
         if (raw.code !in 200..299) throw ErrorLoadingException("KinoVibe: плейлист вернул HTTP ${raw.code}")
         val playlist = tryParseJson<Playlist>(raw.text.trimStart('\uFEFF'))?.playlist
             ?: throw ErrorLoadingException("KinoVibe: изменился формат списка серий")

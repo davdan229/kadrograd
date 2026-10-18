@@ -40,7 +40,7 @@ class LibriaProvider(baseUrl: String) : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val extra = if (request.data == "ongoing") "&f[is_ongoing]=true" else ""
-        val raw = app.get("$api/anime/catalog/releases?limit=24&page=$page$extra", timeout = 20_000)
+        val raw = SourceHttp.get("AniLibria", "$api/anime/catalog/releases?limit=24&page=$page$extra")
         if (raw.code !in 200..299) throw ErrorLoadingException("AniLibria: сервер каталога вернул HTTP ${raw.code}")
         val response = raw.parsedSafe<Catalog>() ?: throw ErrorLoadingException("AniLibria: каталог недоступен")
         val pagination = response.meta?.pagination
@@ -51,14 +51,14 @@ class LibriaProvider(baseUrl: String) : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.isBlank()) return emptyList()
         val encoded = URLEncoder.encode(query.trim(), "UTF-8")
-        return tryParseJson<List<Release>>(app.get("$api/app/search/releases?query=$encoded", timeout = 20_000).text)
+        return tryParseJson<List<Release>>(SourceHttp.get("AniLibria", "$api/app/search/releases?query=$encoded").text)
             ?.mapNotNull(::card)
             ?: throw ErrorLoadingException("AniLibria: поиск временно недоступен")
     }
 
     private suspend fun release(id: Int): Release {
         if (id <= 0) throw ErrorLoadingException("AniLibria: неверный номер релиза")
-        val raw = app.get("$api/anime/releases/$id", timeout = 20_000)
+        val raw = SourceHttp.get("AniLibria", "$api/anime/releases/$id")
         if (raw.code !in 200..299) throw ErrorLoadingException("AniLibria: сервер карточки вернул HTTP ${raw.code}")
         val item = raw.parsedSafe<Release>() ?: throw ErrorLoadingException("AniLibria: не удалось получить карточку")
         if (item.id != id) throw ErrorLoadingException("AniLibria: ответ относится к другому релизу")

@@ -6,12 +6,18 @@ import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import org.jsoup.Jsoup
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeoutOrNull
+import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
 import java.net.URI
 
-/** Public AnimeVost mobile API; no saved video URLs or account required. */
+/** Uses the official web mirror, independently of api.animevost.org. */
 class VostProvider(baseUrl: String) : MainAPI() {
     override var mainUrl = baseUrl
     override var name = "Кадроград · AnimeVost"
@@ -19,129 +25,135 @@ class VostProvider(baseUrl: String) : MainAPI() {
     override val hasMainPage = true
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
-    override val mainPage = mainPageOf("last" to "Аниме — каталог AnimeVost")
-
-    private fun text(value: String) = Jsoup.parse(value).text()
-    private fun kind(item: Release) = when {
-        item.type.contains("фильм", true) -> TvType.AnimeMovie
-        item.type.equals("OVA", true) || item.type.equals("ONA", true) -> TvType.OVA
+    override val mainPage = mainPageOf("all" to "Аниме — каталог AnimeVost")
+    private val probes = Semaphore(4)
+    private fun absolute(value: String) = URI(mainUrl + "/").resolve(value).toString()
+    private fun metadata(node: Element, label: String): String = node.select(".shortstoryContent p").firstOrNull {
+        it.selectFirst("strong")?.text()?.startsWith(label, true) == true
+    }?.let { it.text().removePrefix(it.selectFirst("strong")!!.text()).trim() }.orEmpty()
+    private fun kind(node: Element) = when (metadata(node, "Тип").lowercase()) {
+        "полнометражный фильм", "короткометражный фильм" -> TvType.AnimeMovie
+        "ova", "ona", "тв-спэшл" -> TvType.OVA
         else -> TvType.Anime
     }
-    private fun card(item: Release): SearchResponse? {
-        if (item.id <= 0 || item.title.isBlank()) return null
-        return newAnimeSearchResponse(text(item.title), "$mainUrl/v1/info?id=${item.id}", kind(item)) {
-            posterUrl = mediaUrl(item.poster)
-            year = item.year.toIntOrNull()
+    private fun title(node: Element) = node.selectFirst(".shortstoryHead h1, .shortstoryHead h2")?.text().orEmpty()
+    private fun poster(node: Element) = node.selectFirst(".shortstoryContent img[src]")?.attr("src")?.let(::absolute)
+    private fun card(node: Element): SearchResponse? {
+        val link = node.selectFirst(".shortstoryHead h2 a[href]") ?: return null
+        val id = Regex("/(\\d+)-").find(link.attr("href"))?.groupValues?.get(1)?.toIntOrNull() ?: return null
+        if (link.text().isBlank()) return null
+        return newAnimeSearchResponse(link.text(), "$mainUrl/index.php?newsid=$id", kind(node)) {
+            posterUrl = poster(node)
+            year = metadata(node, "Год выхода").toIntOrNull()
             addDubStatus(true)
         }
     }
-
-    private fun envelope(status: Int, body: String): Envelope {
-        if (status !in 200..299) throw ErrorLoadingException("AnimeVost: сервер вернул HTTP $status")
-        val result = tryParseJson<Envelope>(body)
-        if (result?.state?.status != "ok" || result.data == null)
-            throw ErrorLoadingException("AnimeVost: изменился ответ сервера или источник недоступен")
-        return result
+    private suspend fun document(url: String): Document {
+        val raw = SourceHttp.get("AnimeVost", url)
+        if (raw.code !in 200..299) throw ErrorLoadingException("AnimeVost: зеркало вернуло HTTP ${raw.code}")
+        return raw.document
     }
-
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val raw = app.get("$mainUrl/v1/last?page=$page&quantity=24", timeout = 20_000)
-        val result = envelope(raw.code, raw.text)
-        val items = result.data.orEmpty()
-        return newHomePageResponse(request.name, items.mapNotNull(::card), hasNext =
-            result.state?.count?.let { page.toLong() * 24 < it } ?: (items.size == 24))
+        val doc = document(if (page <= 1) "$mainUrl/" else "$mainUrl/page/$page/")
+        val cards = doc.select(".shortstory").mapNotNull(::card)
+        if (cards.isEmpty()) throw ErrorLoadingException("AnimeVost: зеркало не выдало каталог. Проверьте его адрес в настройках расширения.")
+        return newHomePageResponse(request.name, cards, hasNext = doc.select("a[href]").any {
+            runCatching { URI(absolute(it.attr("href"))).path.endsWith("/page/${page + 1}/") }.getOrDefault(false)
+        })
     }
-
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.isBlank()) return emptyList()
-        val raw = app.post("$mainUrl/v1/search", data = mapOf("name" to query.trim()), timeout = 20_000)
-        return envelope(raw.code, raw.text).data.orEmpty().mapNotNull(::card)
+        return withTimeoutOrNull(16_000) {
+            suspend fun page(number: Int): Document {
+                val raw = SourceHttp.post("AnimeVost", "$mainUrl/index.php?do=search", mapOf("do" to "search", "subaction" to "search",
+                    "full_search" to "0", "titleonly" to "3", "search_start" to number.toString(), "story" to query.trim()))
+                if (raw.code !in 200..299) throw ErrorLoadingException("AnimeVost: поиск вернул HTTP ${raw.code}")
+                return raw.document.also {
+                    if (it.select(".global_search").isEmpty()) throw ErrorLoadingException("AnimeVost: зеркало поиска недоступно")
+                }
+            }
+            val first = page(0)
+            val total = Regex("найдено\\s+(\\d+)", RegexOption.IGNORE_CASE).find(first.select(".global_search").text())
+                ?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            // The site's search is paginated; descriptions must not crowd out old exact titles.
+            val pages = ((total + 9) / 10).coerceIn(1, 5)
+            val slots = Semaphore(2)
+            val extra = coroutineScope { (2..pages).map { n -> async { slots.withPermit { page(n) } } }.awaitAll() }
+            (listOf(first) + extra).flatMap { it.select(".shortstory").mapNotNull(::card) }.distinctBy { it.url }
+        } ?: throw ErrorLoadingException("AnimeVost: поиск не ответил за 16 секунд")
     }
-
-    private suspend fun release(id: Int): Release {
-        val raw = app.post("$mainUrl/v1/info", data = mapOf("id" to id.toString()), timeout = 20_000)
-        return envelope(raw.code, raw.text).data.orEmpty().firstOrNull { it.id == id }
-            ?: throw ErrorLoadingException("AnimeVost: запрошенный релиз не найден")
+    private suspend fun details(id: Int): Document {
+        val doc = document("$mainUrl/index.php?newsid=$id")
+        if (doc.select(".shortstory [id=ratig-layer-$id]").isEmpty())
+            throw ErrorLoadingException("AnimeVost: запрошенный релиз не найден на зеркале")
+        return doc
     }
-
-    private suspend fun playlist(id: Int): List<VostEpisode> {
-        val raw = app.post("$mainUrl/v1/playlist", data = mapOf("id" to id.toString()), timeout = 20_000)
-        if (raw.code !in 200..299) throw ErrorLoadingException("AnimeVost: список серий вернул HTTP ${raw.code}")
-        return tryParseJson<List<VostEpisode>>(raw.text)
-            ?: throw ErrorLoadingException("AnimeVost: список серий недоступен")
+    private fun episodes(doc: Document): Map<String, String> {
+        val raw = doc.select("script").asSequence().mapNotNull {
+            Regex("""\bvar\s+data\s*=\s*(\{[\s\S]*?})\s*;""").find(it.data())?.groupValues?.get(1)
+        }.firstOrNull() ?: throw ErrorLoadingException("AnimeVost: список серий изменился или отсутствует")
+        return tryParseJson<Map<String, String?>>(raw.replace(Regex(",\\s*}"), "}"))
+            ?.mapNotNull { (label, video) -> video?.takeIf { it.matches(Regex("\\d+")) && label.isNotBlank() }?.let { label to it } }
+            ?.toMap() ?: throw ErrorLoadingException("AnimeVost: не удалось разобрать список серий")
     }
-
     override suspend fun load(url: String): LoadResponse {
-        val id = runCatching { URI(url).query?.substringAfter("id=")?.toIntOrNull() }.getOrNull()
-            ?.takeIf { it > 0 } ?: throw ErrorLoadingException("AnimeVost: неверный номер релиза")
-        val item = release(id)
-        val episodes = playlist(id).filter { it.key() != null && (mediaUrl(it.hd) != null || mediaUrl(it.std) != null) }
-            .distinctBy { it.key() }
-        if (episodes.isEmpty()) throw ErrorLoadingException("AnimeVost: опубликованных видео пока нет")
-        val title = text(item.title)
-        val type = kind(item)
-        if (type == TvType.AnimeMovie && episodes.size == 1) {
-            return newMovieLoadResponse(title, url, type, EpisodeRef(id, episodes.single().key()!!).toJson()) {
-                posterUrl = mediaUrl(item.poster)
-                year = item.year.toIntOrNull()
-                plot = text(item.description)
-                tags = item.genre.split(',').map(String::trim).filter(String::isNotEmpty)
+        val uri = runCatching { URI(url) }.getOrNull()
+        // Recognize cards and episode references saved by versions 1/2 as well.
+        val id = uri?.query?.split('&')?.firstOrNull { it.startsWith("newsid=") || it.startsWith("id=") }
+            ?.substringAfter('=')?.toIntOrNull()
+            ?: uri?.path?.let { Regex("/(\\d+)-").find(it)?.groupValues?.get(1)?.toIntOrNull() }
+            ?: throw ErrorLoadingException("AnimeVost: неверный номер релиза")
+        if (id <= 0) throw ErrorLoadingException("AnimeVost: неверный номер релиза")
+        val doc = details(id)
+        val node = doc.select(".shortstory").firstOrNull { it.select("[id=ratig-layer-$id]").isNotEmpty() }
+            ?: throw ErrorLoadingException("AnimeVost: карточка недоступна")
+        val list = episodes(doc)
+        if (list.isEmpty()) throw ErrorLoadingException("AnimeVost: опубликованных видео пока нет")
+        val canonical = "$mainUrl/index.php?newsid=$id"
+        val type = kind(node)
+        val plot = node.selectFirst("[itemprop=description]")?.text()
+        if (type == TvType.AnimeMovie && list.size == 1) {
+            return newMovieLoadResponse(title(node), canonical, type, EpisodeRef(id, "${list.values.single()}.mp4").toJson()) {
+                posterUrl = poster(node); year = metadata(node, "Год выхода").toIntOrNull(); this.plot = plot
             }
         }
-        return newAnimeLoadResponse(title, url, type) {
-            posterUrl = mediaUrl(item.poster)
-            year = item.year.toIntOrNull()
-            plot = text(item.description)
-            tags = item.genre.split(',').map(String::trim).filter(String::isNotEmpty)
-            addEpisodes(DubStatus.Dubbed, episodes.map { ep ->
-                newEpisode(EpisodeRef(id, ep.key()!!).toJson(), {
-                    name = text(ep.name)
-                    episode = Regex("^(\\d+)\\s+серия").find(ep.name)?.groupValues?.get(1)?.toIntOrNull()
-                    posterUrl = mediaUrl(ep.preview)
+        return newAnimeLoadResponse(title(node), canonical, type) {
+            posterUrl = poster(node); year = metadata(node, "Год выхода").toIntOrNull(); this.plot = plot
+            tags = metadata(node, "Жанр").split(',').map(String::trim).filter(String::isNotEmpty)
+            addEpisodes(DubStatus.Dubbed, list.map { (label, video) ->
+                newEpisode(EpisodeRef(id, "$video.mp4").toJson(), {
+                    name = label
+                    episode = Regex("^(\\d+)\\s+серия").find(label)?.groupValues?.get(1)?.toIntOrNull()
                 }, fix = false)
             })
         }
     }
+    internal fun candidates(html: String, video: String): List<String> = Regex("""https?://[^\s"'<>,]+\.mp4(?:\?[^\s"'<>,]*)?""")
+        .findAll(html.replace("\\/", "/").replace("&amp;", "&")).map { it.value }
+        .filter { StreamTools.isHttp(it) && URI(it).path.substringAfterLast('/') == "$video.mp4" }
+        .distinctBy { URI(it).let { u -> "${u.host}|${u.path}" } }.take(8).toList()
 
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit): Boolean {
-        val ref = tryParseJson<EpisodeRef>(data)?.takeIf { it.releaseId > 0 && it.key.isNotBlank() } ?: return false
-        // Fetch again so history contains an episode identity, never a stale CDN URL.
-        val episode = playlist(ref.releaseId).firstOrNull { it.key() == ref.key } ?: return false
-        val seen = HashSet<String>()
-        for ((label, quality, raw) in listOf(Triple("720p", 720, episode.hd),
-            Triple("SD", Qualities.Unknown.value, episode.std))) {
-            val stream = mediaUrl(raw) ?: continue
-            if (!seen.add(stream)) continue
-            callback(newExtractorLink(name, "AnimeVost · $label · MP4", stream, ExtractorLinkType.VIDEO) {
-                this.quality = quality
-                referer = "https://animevost.org/"
+        val ref = tryParseJson<EpisodeRef>(data)?.takeIf { it.releaseId > 0 } ?: return false
+        val video = Regex("^(\\d+)\\.mp4$").matchEntire(ref.key)?.groupValues?.get(1) ?: return false
+        val found = withTimeoutOrNull(28_000) {
+            if (video !in episodes(details(ref.releaseId)).values)
+                throw ErrorLoadingException("AnimeVost: выбранная серия больше не опубликована на зеркале")
+            val frame = SourceHttp.get("AnimeVost", "$mainUrl/frame5.php?play=$video&_=${System.currentTimeMillis()}", "$mainUrl/")
+            if (frame.code !in 200..299) throw ErrorLoadingException("AnimeVost: плеер зеркала вернул HTTP ${frame.code}")
+            coroutineScope { candidates(frame.text, video).map { url -> async {
+                probes.withPermit { url.takeIf { SourceHttp.accessibleMp4(it, "$mainUrl/") } }
+            } }.awaitAll().filterNotNull() }
+        } ?: throw ErrorLoadingException("AnimeVost: видеосерверы не ответили за 28 секунд")
+        if (found.isEmpty()) throw ErrorLoadingException("AnimeVost: доступных видеосерверов в этой сети не найдено")
+        for (url in found.sortedByDescending { URI(it).path.contains("/720/") }) {
+            val quality = if (URI(url).path.contains("/720/")) 720 else 480
+            callback(newExtractorLink(name, "AnimeVost · ${URI(url).host} · ${quality}p · MP4", url, ExtractorLinkType.VIDEO) {
+                this.quality = quality; referer = "$mainUrl/"
             })
         }
-        return seen.isNotEmpty()
+        return true
     }
-
-    private fun mediaUrl(raw: String?): String? {
-        val value = raw?.trim()?.takeIf(StreamTools::isHttp) ?: return null
-        val uri = runCatching { URI(value) }.getOrNull() ?: return null
-        if (uri.host.isNullOrBlank() || uri.userInfo != null) return null
-        // HTTPS has been checked on these legacy HTTP hosts; do not rewrite unknown hosts.
-        return if (uri.scheme == "http" && uri.host in setOf("video.animetop.info", "media.animetop.info"))
-            "https://" + value.substringAfter("://") else value
-    }
-
     data class EpisodeRef(@JsonProperty("releaseId") val releaseId: Int, @JsonProperty("key") val key: String)
-    data class State(@JsonProperty("status") val status: String = "", @JsonProperty("count") val count: Int? = null)
-    data class Envelope(@JsonProperty("state") val state: State? = null, @JsonProperty("data") val data: List<Release>? = null)
-    data class Release(@JsonProperty("id") val id: Int = 0, @JsonProperty("title") val title: String = "",
-        @JsonProperty("description") val description: String = "", @JsonProperty("genre") val genre: String = "",
-        @JsonProperty("year") val year: String = "", @JsonProperty("type") val type: String = "",
-        @JsonProperty("urlImagePreview") val poster: String? = null)
-    data class VostEpisode(@JsonProperty("name") val name: String = "", @JsonProperty("hd") val hd: String? = null,
-        @JsonProperty("std") val std: String? = null, @JsonProperty("preview") val preview: String? = null) {
-        fun key(): String? = sequenceOf(hd, std).mapNotNull { value ->
-            runCatching { URI(value ?: return@mapNotNull null).path?.substringAfterLast('/') }
-                .getOrNull()?.takeIf { it.matches(Regex("\\d+\\.mp4")) }
-        }.firstOrNull() ?: name.trim().takeIf(String::isNotEmpty)?.let { "name:$it" }
-    }
 }

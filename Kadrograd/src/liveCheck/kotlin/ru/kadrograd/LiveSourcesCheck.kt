@@ -39,8 +39,8 @@ class LiveSourcesCheck {
         return links
     }
     @Test fun animeVostSearchDetailsEpisodesAndMedia() = runBlocking {
-        val api = VostProvider("https://api.animevost.org")
-        assertEquals(24, api.getMainPage(2, MainPageRequest("Каталог", "last", false)).items.single().list.size)
+        val api = VostProvider("https://v14.vost.pw")
+        assertTrue(api.getMainPage(2, MainPageRequest("Каталог", "all", false)).items.single().list.isNotEmpty())
         for ((query, year, expected) in listOf(Triple("Тетрадь смерти", 2006, 37), Triple("Монстр", 2004, 74), Triple("Форма голоса", 2016, 1))) {
             val found = api.search(query).filterIsInstance<AnimeSearchResponse>().first { it.year == year && it.name.contains(query, true) }
             val loaded = api.load(found.url)

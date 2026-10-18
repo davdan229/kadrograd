@@ -44,7 +44,7 @@ import org.jsoup.nodes.Element
 class FilmixProvider(baseUrl: String) : MainAPI() {
     override var mainUrl = baseUrl
     private val voiceSlots = Semaphore(3)
-    private val http by lazy { Session(app.baseClient).apply { defaultHeaders = app.defaultHeaders; responseParser = app.responseParser } }
+    private val http by lazy { Session(app.baseClient).apply { defaultTimeOut = 12L; defaultHeaders = app.defaultHeaders; responseParser = app.responseParser } }
     override var name = "Кадроград · Filmix (экспериментальный)"
     override val hasMainPage = true
     override var lang = "ru"

@@ -1,6 +1,6 @@
-version = 2
+version = 3
 cloudstream {
-    description = "Кадроград: каталоги кино, сериалов, мультфильмов и аниме. HDRezka, AniLibria, AnimeVost; Filmix экспериментальный. Доступность видео зависит от источника и сети."
+    description = "Кадроград: AniLibria и веб-зеркало AnimeVost. Ограниченное время ожидания и проверка видеоссылок. KinoVibe, HDRezka и Filmix включаются отдельно."
     authors = listOf("davdan229", "hexated", "lxnhere")
     language = "ru"
     status = 1
