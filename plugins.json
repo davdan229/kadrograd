@@ -1,9 +1,9 @@
 [
     {
-        "fileHash": "sha256-57efbdc40b0b6b33ebeec5dfad5d37c1912d8e3f7498ab9325d4e4f07fdeb6db",
+        "fileHash": "sha256-58c782960205c3dc75d5a6ab6793b1bd2e982a878ad63babc7e7ee7c2059a2f6",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/davdan229/kadrograd",
-        "fileSize": 179328,
+        "fileSize": 207845,
         "status": 1,
         "language": "ru",
         "authors": [
@@ -20,7 +20,7 @@
             "OVA",
             "AsianDrama"
         ],
-        "version": 4,
+        "version": 5,
         "internalName": "Kadrograd",
         "description": "\u041a\u0430\u0434\u0440\u043e\u0433\u0440\u0430\u0434: Zona \u0434\u043b\u044f \u043a\u0438\u043d\u043e \u0438 \u0441\u0435\u0440\u0438\u0430\u043b\u043e\u0432, AniLibria \u0438 AnimeVost \u0434\u043b\u044f \u0430\u043d\u0438\u043c\u0435. \u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 \u0432\u0438\u0434\u0435\u043e\u0441\u0441\u044b\u043b\u043e\u043a \u0438 \u043e\u0433\u0440\u0430\u043d\u0438\u0447\u0435\u043d\u043d\u043e\u0435 \u043e\u0436\u0438\u0434\u0430\u043d\u0438\u0435. \u0412\u043e\u0437\u043c\u043e\u0436\u043d\u043e\u0441\u0442\u0438 \u0437\u0430\u0432\u0438\u0441\u044f\u0442 \u043e\u0442 \u0438\u0441\u0442\u043e\u0447\u043d\u0438\u043a\u0430.",
         "url": "https://raw.githubusercontent.com/davdan229/kadrograd/builds/Kadrograd.cs3",
