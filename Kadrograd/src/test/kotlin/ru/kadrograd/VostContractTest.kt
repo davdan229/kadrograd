@@ -46,10 +46,12 @@ class VostContractTest {
         reply = { 200 to release() }
         val found = provider.search("Тетрадь смерти & мир").single() as AnimeSearchResponse
         assertEquals(2006, found.year)
-        assertTrue(found.url.endsWith("index.php?newsid=154"))
+        assertTrue(found.url.endsWith("/tip/tv/154-death-note.html"))
         assertEquals("POST", requests.single().method)
         assertTrue(requests.single().body!!.utf8().contains("%26"))
         assertTrue(requests.single().body!!.utf8().contains("titleonly=3"))
+        assertFalse(requests.single().headers["User-Agent"].orEmpty().contains("Mobile"))
+        assertTrue(requests.single().headers["User-Agent"].orEmpty().contains("Windows NT"))
         assertEquals("/index.php", requests.single().url.encodedPath)
     }
     @Test fun catalogPaginationUsesMirrorPagesAndCorrectRelativePoster() = runBlocking {
@@ -103,5 +105,17 @@ class VostContractTest {
             else release() + """<div class="global_search">найдено 18 ответов</div>""" }
         assertEquals(2, provider.search("Монстр").size)
         assertEquals(2, requests.size)
+    }
+    @Test fun directCardAndPlaybackUseArticleInsteadOfNumericRedirectAndBrowserHeaders() = runBlocking {
+        setup()
+        val card = provider.getMainPage(1,MainPageRequest("Каталог","all",false)).items.single().list.single()
+        val loaded = provider.load(card.url) as AnimeLoadResponse
+        val links = mutableListOf<ExtractorLink>()
+        assertTrue(provider.loadLinks(loaded.episodes.getValue(DubStatus.Dubbed).first().data,false,{},links::add))
+        assertTrue(requests.none { it.url.encodedPath == "/index.php" })
+        assertEquals(2,requests.count { it.url.encodedPath == "/tip/tv/154-death-note.html" })
+        assertTrue(requests.first { it.url.encodedPath == "/tip/tv/154-death-note.html" }.headers["User-Agent"].orEmpty().contains("Chrome/"))
+        assertTrue(requests.filter { it.url.encodedPath in setOf("/","/tip/tv/154-death-note.html","/frame5.php") }
+            .all { it.headers["User-Agent"].orEmpty().contains("Windows NT") })
     }
 }

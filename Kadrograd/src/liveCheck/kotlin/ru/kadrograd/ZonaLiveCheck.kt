@@ -2,6 +2,7 @@ package ru.kadrograd
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import kotlinx.coroutines.runBlocking
 import okhttp3.Request
 import org.junit.Assert.*
@@ -13,7 +14,9 @@ import java.net.URI
 class ZonaLiveCheck {
     private val api = ZonaProvider("https://w1.zona.im")
     private fun sample(link: ExtractorLink) {
-        val client = app.baseClient.newBuilder().callTimeout(12, TimeUnit.SECONDS).build()
+        val client = app.baseClient.newBuilder().callTimeout(12, TimeUnit.SECONDS).apply {
+            api.getVideoInterceptor(link)?.let(::addInterceptor)
+        }.build()
         fun get(url: String, range: String? = null): Pair<Int, ByteArray> {
             val request = Request.Builder().url(url).header("Referer", link.referer).apply {
                 link.headers.forEach { (key, value) -> header(key, value) }
@@ -27,7 +30,19 @@ class ZonaLiveCheck {
                 response.code to buffer.copyOf(count)
             }
         }
-        if (URI(link.url).path.endsWith(".m3u8")) {
+        if (link.type == ExtractorLinkType.DASH) {
+            val document = client.newCall(Request.Builder().url(link.url).build()).execute().use {
+                assertTrue(it.isSuccessful); ZonaTracks.manifest(it.body.string())
+            }
+            for (rep in listOf(document.getElementsByTag("Representation").first()!!,document.getElementsByTag("Representation").last()!!)) {
+                val template = rep.getElementsByTag("SegmentTemplate").first()!!
+                val base = document.getElementsByTag("BaseURL").firstOrNull()?.text()?.let { URI(link.url).resolve(it) } ?: URI(link.url)
+                val path = template.attr("media").replace("\$Number\$",template.attr("startNumber").ifBlank { "1" })
+                val bytes = get(base.resolve(path).toString(),"bytes=0-4095").second
+                assertEquals("1f43b675",bytes.take(4).joinToString("") { "%02x".format(it.toInt() and 255) })
+            }
+            println("Zona DASH: ${link.quality}p; named audio/video segments verified")
+        } else if (URI(link.url).path.endsWith(".m3u8")) {
             var url = link.url
             repeat(3) {
                 val text = String(get(url).second)
@@ -68,19 +83,10 @@ class ZonaLiveCheck {
             play(loaded.dataUrl); println("Verified $query ($year), live action movie")
         }
     }
-    @Test fun matrixUnavailableCdnDoesNotReachPlayer() = runBlocking {
+    @Test fun matrixUsesAvailableMainPlayer() = runBlocking {
         val loaded = api.load("${api.mainUrl}/movies/matritsa") as MovieLoadResponse
         assertEquals(1999,loaded.year)
-        val links = mutableListOf<ExtractorLink>()
-        try {
-            api.loadLinks(loaded.dataUrl,false,{},links::add)
-            links.distinctBy { it.quality }.forEach(::sample)
-            println("Matrix: available CDN returned verified media")
-        } catch (error: ErrorLoadingException) {
-            assertTrue(links.isEmpty())
-            assertTrue(error.message.orEmpty().contains("видеоссылок"))
-            println("LIMITATION: Matrix catalogue exists, but supported CDN is unavailable from this checking network")
-        }
+        play(loaded.dataUrl)
     }
     @Test fun mentalistAllSeasonsAndFirstLastMedia() = runBlocking {
         val card = api.search("Менталист").first { it.url.endsWith("/mentalist-2008") }

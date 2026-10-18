@@ -34,6 +34,10 @@ class ZonaProvider(baseUrl: String) : MainAPI() {
     internal var streamApiOrigins = listOf("https://vsw01.zonasearch.com", "https://vsr01.zonasearch.com")
     private val ua = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
     private val headers get() = mapOf("User-Agent" to ua)
+    private val nativeTracks by lazy { ZonaTracks({streamApiOrigins},ua) }
+    override fun getVideoInterceptor(extractorLink: ExtractorLink): okhttp3.Interceptor? =
+        ZonaTracks.context(extractorLink)?.let(ZonaTracks::interceptor)
+    private data class Playback(val direct: List<Stream>, val native: ZonaTracks.Found?)
     private fun escaped(value: String) = URLEncoder.encode(value, "UTF-8").replace("+", "%20")
     private fun error(message: String): Nothing = throw ErrorLoadingException("Zona: $message")
 
@@ -200,26 +204,45 @@ class ZonaProvider(baseUrl: String) : MainAPI() {
         val (series, slug) = identity(stored.page)
         if (stored.kpId <= 0 || (series && (stored.season == null || stored.episode == null || stored.season <= 0 || stored.episode <= 0))) return false
         val ref = mainUrl + pagePath(series, slug)
-        val valid = withTimeoutOrNull(40_000) {
+        val playback = withTimeoutOrNull(45_000) {
             val current = details(series, slug, stored.season)
             if (current.kpId != stored.kpId || (series && current.episodes.none { it.part == stored.episode && !it.banned })) error("выбранная серия больше не доступна")
             val time = clock()
             val key = if (series) "S${stored.season.toString().padStart(2, '0')}E${stored.episode.toString().padStart(2, '0')}" else ""
             val envelope = tryParseJson<Sources>(transport(videoApiOrigins, "/getVideoSources",
-                "movie_source_types=1,3,48&kinopoisk_id=${stored.kpId}&episode_key=$key&trailer=false", time)) ?: error("изменился формат ответа плеера")
+                "movie_source_types=1,3,32,48&kinopoisk_id=${stored.kpId}&episode_key=$key&trailer=false", time)) ?: error("изменился формат ответа плеера")
             val sources = envelope.data.filter { it.kpId == stored.kpId && it.key != "0" && (!series || it.episode == key) }.take(6)
-            val candidates = coroutineScope { sources.map { source -> async {
+            coroutineScope {
+            val native = async {
+                val source = sources.firstOrNull { it.type == 32 }
+                if (source == null || isCasting) null else try { nativeTracks.load(source.key,stored.season,stored.episode) }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { null }
+            }
+            val candidates = sources.filter { it.type != 32 }.map { source -> async {
                 try { streams(source, time, stored.season, stored.episode) }
                 catch (cancelled: CancellationException) { throw cancelled }
                 catch (_: Exception) { emptyList() }
-            } }.awaitAll().flatten() }.distinctBy { it.url }.take(24)
-            coroutineScope {
+            } }.awaitAll().flatten().distinctBy { it.url }.take(24)
+            val direct = coroutineScope {
                 val limit = Semaphore(4)
                 candidates.map { stream -> async { limit.withPermit { stream.takeIf { available(it, ref) } } } }.awaitAll().filterNotNull()
             }
+            Playback(direct,native.await())
+            }
         } ?: error("видеосерверы не ответили вовремя")
-        if (valid.isEmpty()) error("доступных видеоссылок для этой серии или фильма нет в текущей сети")
-        valid.forEach { stream ->
+        if (playback.direct.isEmpty() && playback.native == null) error("доступных видеоссылок для этой серии или фильма нет в текущей сети")
+        playback.native?.let { native ->
+            for (variant in native.variants) {
+                callback(newExtractorLink(name,"Zona · ${variant.dimensions} · ${native.context.voices.size} озвучек · DASH",
+                    native.url + "#kg-${variant.width}x${variant.height}",ExtractorLinkType.DASH) {
+                    quality = variant.height; referer = ref; headers = this@ZonaProvider.headers
+                    extractorData = native.context.copy(width=variant.width,height=variant.height).toJson()
+                })
+            }
+            native.subtitles.distinctBy { it.url }.forEach { sub -> subtitleCallback(SubtitleFile(sub.name,sub.url)) }
+        }
+        playback.direct.forEach { stream ->
             val hls = URI(stream.url).path.endsWith(".m3u8")
             callback(newExtractorLink(name, listOf("Zona", stream.translation, stream.resolution, if (hls) "HLS" else "MP4").filter(String::isNotBlank).joinToString(" · "),
                 stream.url, if (hls) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO) {

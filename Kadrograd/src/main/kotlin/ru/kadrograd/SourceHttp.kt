@@ -33,9 +33,10 @@ internal object SourceHttp {
         return request(source, timeoutSeconds) { app.get(url, referer = referer, headers = headers, timeout = timeoutSeconds) }
     }
 
-    suspend fun post(source: String, url: String, data: Map<String, String>, timeoutSeconds: Long = REQUEST_SECONDS): NiceResponse {
+    suspend fun post(source: String, url: String, data: Map<String, String>, timeoutSeconds: Long = REQUEST_SECONDS,
+        headers: Map<String,String> = emptyMap(), referer: String? = null): NiceResponse {
         require(timeoutSeconds in 1..45)
-        return request(source, timeoutSeconds) { app.post(url, data = data, timeout = timeoutSeconds) }
+        return request(source, timeoutSeconds) { app.post(url, data = data, timeout = timeoutSeconds, headers = headers, referer = referer) }
     }
 
     suspend fun accessibleMp4(url: String, referer: String): Boolean = try {
