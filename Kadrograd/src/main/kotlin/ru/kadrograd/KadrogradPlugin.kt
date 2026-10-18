@@ -16,13 +16,15 @@ import com.lagradost.cloudstream3.plugins.Plugin
 class KadrogradPlugin : Plugin() {
     override fun load(context: Context) {
         val prefs = context.getSharedPreferences("kadrograd_settings_v1", Context.MODE_PRIVATE)
-        val defaults = linkedMapOf("vibe" to "https://kinovibe.cc", "libria" to "https://anilibria.top", "vost_web" to "https://v14.vost.pw", "rezka" to "https://hdrezka-home.tv", "filmix" to "https://filmix.gg")
+        val defaults = linkedMapOf("zona" to "https://w1.zona.im", "vibe" to "https://kinovibe.cc", "libria" to "https://anilibria.top", "vost_web" to "https://v14.vost.pw", "rezka" to "https://hdrezka-home.tv", "filmix" to "https://filmix.gg")
         fun saved(key: String) = StreamTools.origin(prefs.getString(key, defaults.getValue(key)).orEmpty()) ?: defaults.getValue(key)
         val rezka = RezkaProvider(saved("rezka"))
         val filmix = FilmixProvider(saved("filmix"))
         val libria = LibriaProvider(saved("libria"))
         val vost = VostProvider(saved("vost_web"))
         val vibe = VibeProvider(saved("vibe"))
+        val zona = ZonaProvider(saved("zona"))
+        registerMainAPI(zona)
         if (prefs.getBoolean("experimental_vibe", false)) registerMainAPI(vibe)
         if (prefs.getBoolean("experimental_rezka", false)) registerMainAPI(rezka)
         if (prefs.getBoolean("experimental_filmix", false)) registerMainAPI(filmix)
@@ -38,7 +40,7 @@ class KadrogradPlugin : Plugin() {
             content.addView(TextView(context).apply {
                 text = "Адреса источников можно заменить, если сайт переехал. Укажите основной HTTPS-адрес без пути. После сохранения обновите главную страницу.\n\nОзвучки, качество и субтитры зависят от выбранного источника."
             })
-            val labels = mapOf("rezka" to "HDRezka", "filmix" to "Filmix", "libria" to "AniLibria", "vost_web" to "AnimeVost — зеркало сайта", "vibe" to "KinoVibe")
+            val labels = mapOf("zona" to "Zona — современный сайт zona.im", "rezka" to "HDRezka", "filmix" to "Filmix", "libria" to "AniLibria", "vost_web" to "AnimeVost — зеркало сайта", "vibe" to "KinoVibe")
             val inputs = defaults.mapValues { (key, _) ->
                 content.addView(TextView(context).apply { text = labels.getValue(key) })
                 EditText(context).apply {
@@ -73,6 +75,7 @@ class KadrogradPlugin : Plugin() {
                     libria.mainUrl = defaults.getValue("libria")
                     vost.mainUrl = defaults.getValue("vost_web")
                     vibe.mainUrl = defaults.getValue("vibe")
+                    zona.mainUrl = defaults.getValue("zona")
                     Toast.makeText(context, "Адреса восстановлены. Перезапустите приложение для смены набора источников", Toast.LENGTH_LONG).show()
                 }.create()
             dialog.setOnShowListener {
@@ -92,6 +95,7 @@ class KadrogradPlugin : Plugin() {
                         libria.mainUrl = values.getValue("libria")!!
                         vost.mainUrl = values.getValue("vost_web")!!
                         vibe.mainUrl = values.getValue("vibe")!!
+                        zona.mainUrl = values.getValue("zona")!!
                         dialog.dismiss()
                     }
                 }
