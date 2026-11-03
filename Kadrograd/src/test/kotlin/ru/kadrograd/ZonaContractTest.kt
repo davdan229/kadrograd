@@ -16,6 +16,7 @@ class ZonaContractTest {
     private lateinit var provider: ZonaProvider
     private val requests = Collections.synchronizedList(mutableListOf<RecordedRequest>())
     private var reply: (RecordedRequest) -> Pair<Int, String> = { 404 to "" }
+    private var headerDelay: (RecordedRequest) -> Long = { 0 }
     private var base = ""
     @Before fun start() {
         server = MockWebServer()
@@ -23,7 +24,8 @@ class ZonaContractTest {
             override fun dispatch(request: RecordedRequest): MockResponse {
                 requests += request
                 val (code, body) = reply(request)
-                return MockResponse.Builder().code(code).body(body).addHeader("Date", "Sun, 18 Oct 2026 04:19:18 GMT").build()
+                return MockResponse.Builder().code(code).body(body).addHeader("Date", "Sun, 18 Oct 2026 04:19:18 GMT")
+                    .headersDelay(headerDelay(request),java.util.concurrent.TimeUnit.MILLISECONDS).build()
             }
         }
         server.start(); base = server.url("/").toString().trimEnd('/')
@@ -83,6 +85,28 @@ class ZonaContractTest {
         try { provider.loadLinks(stored(), false, {}, links::add); fail("Blocked media") }
         catch (expected: ErrorLoadingException) { assertTrue(expected.message.orEmpty().contains("видеоссылок")) }
         assertTrue(links.isEmpty())
+    }
+    @Test fun slowAlternateSourcesDoNotDiscardVerifiedFullHd() = runBlocking {
+        setup(streamBody = """[{"url":"$base/1080.mp4","resolution":"1080p"},{"url":"$base/slow.mp4","resolution":"720p"}]""")
+        val previous = reply
+        reply = { req ->
+            if (req.url.encodedPath in setOf("/1080.mp4","/slow.mp4")) 206 to "\u0000\u0000\u0000 ftypisom"
+            else previous(req)
+        }
+        headerDelay = { req ->
+            when {
+                req.url.encodedPath == "/slow.mp4" -> 3_000
+                req.url.encodedPath == "/getVideoSources" && ZonaTransport.decode(req.url.queryParameter("q")!!,17)
+                    .contains("movie_source_types=32&") -> 3_000
+                else -> 0
+            }
+        }
+        provider.fullHdOnly = true
+        provider.sourceBudgetMillis = 1_200
+        val links = mutableListOf<ExtractorLink>()
+        assertTrue(provider.loadLinks(stored(),false,{},links::add))
+        assertEquals(listOf(1080),links.map { it.quality })
+        assertTrue(requests.any { it.url.encodedPath == "/slow.mp4" })
     }
     @Test fun missingEpisodeOrChangedTitleNeverFallsBackToAnotherVideo() = runBlocking {
         setup()

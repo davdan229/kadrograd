@@ -32,6 +32,7 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
     )
     internal var videoApiOrigins = listOf("https://apiw1.mzona.net", "https://apir1.mzona.net")
     internal var streamApiOrigins = listOf("https://vsw01.zonasearch.com", "https://vsr01.zonasearch.com")
+    internal var sourceBudgetMillis = 30_000L
     private val ua = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
     private val headers get() = mapOf("User-Agent" to ua)
     private val nativeTracks by lazy { ZonaTracks({streamApiOrigins},ua) }
@@ -205,43 +206,54 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         val (series, slug) = identity(stored.page)
         if (stored.kpId <= 0 || (series && (stored.season == null || stored.episode == null || stored.season <= 0 || stored.episode <= 0))) return false
         val ref = mainUrl + pagePath(series, slug)
-        val playback = withTimeoutOrNull(45_000) {
-            val current = details(series, slug, stored.season)
-            if (current.kpId != stored.kpId || (series && current.episodes.none { it.part == stored.episode && !it.banned })) error("выбранная серия больше не доступна")
-            val time = clock()
-            val key = if (series) "S${stored.season.toString().padStart(2, '0')}E${stored.episode.toString().padStart(2, '0')}" else ""
+        val current = details(series, slug, stored.season)
+        if (current.kpId != stored.kpId || (series && current.episodes.none { it.part == stored.episode && !it.banned })) error("выбранная серия больше не доступна")
+        val time = clock()
+        val key = if (series) "S${stored.season.toString().padStart(2, '0')}E${stored.episode.toString().padStart(2, '0')}" else ""
+        val readyDirect = java.util.concurrent.ConcurrentLinkedQueue<Stream>()
+        val readyNative = java.util.concurrent.ConcurrentLinkedQueue<ZonaTracks.Found>()
+        val completed = withTimeoutOrNull(sourceBudgetMillis) {
             coroutineScope {
-            suspend fun candidates(types: String): List<Source> =
-                (tryParseJson<Sources>(transport(videoApiOrigins, "/getVideoSources",
-                    "movie_source_types=$types&kinopoisk_id=${stored.kpId}&episode_key=$key&trailer=false", time))
-                    ?: error("изменился формат ответа плеера")).data.filter {
-                    it.kpId == stored.kpId && it.key.isNotBlank() && it.key != "0" && (!series || it.episode == key)
+                suspend fun candidates(types: String): List<Source> =
+                    (tryParseJson<Sources>(transport(videoApiOrigins, "/getVideoSources",
+                        "movie_source_types=$types&kinopoisk_id=${stored.kpId}&episode_key=$key&trailer=false", time))
+                        ?: error("изменился формат ответа плеера")).data.filter {
+                        it.kpId == stored.kpId && it.key.isNotBlank() && it.key != "0" && (!series || it.episode == key)
+                    }
+                if (!isCasting) launch {
+                    try {
+                        // The mixed query may omit the main player. Only accept the exact requested title/episode and type.
+                        val source = candidates("32").firstOrNull { it.type == 32 }
+                        if (source != null) nativeTracks.load(source.key,stored.season,stored.episode, readyNative::add)
+                    }
+                    catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { }
                 }
-            val native = async {
-                if (isCasting) emptyList() else try {
-                    // The mixed query may omit the main player. Only accept the exact requested title/episode and type.
-                    val source = candidates("32").firstOrNull { it.type == 32 }
-                    if (source == null) emptyList() else nativeTracks.load(source.key,stored.season,stored.episode)
-                }
-                catch (cancelled: CancellationException) { throw cancelled }
-                catch (_: Exception) { emptyList() }
-            }
-            val sources = try { candidates("1,3,48") }
-                catch (cancelled: CancellationException) { throw cancelled }
-                catch (_: Exception) { emptyList() }
-            val candidates = sources.filter { it.type in setOf(1,3,48) }.take(6).map { source -> async {
-                try { streams(source, time, stored.season, stored.episode) }
-                catch (cancelled: CancellationException) { throw cancelled }
-                catch (_: Exception) { emptyList() }
-            } }.awaitAll().flatten().distinctBy { it.url }.take(24)
-            val direct = coroutineScope {
+                val sources = try { candidates("1,3,48") }
+                    catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { emptyList() }
                 val limit = Semaphore(4)
-                candidates.map { stream -> async { limit.withPermit { stream.takeIf { available(it, ref) } } } }.awaitAll().filterNotNull()
+                val seen = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+                val remaining = java.util.concurrent.atomic.AtomicInteger(24)
+                sources.filter { it.type in setOf(1,3,48) }.take(6).forEach { source -> launch {
+                    val candidates = try { streams(source, time, stored.season, stored.episode) }
+                        catch (cancelled: CancellationException) { throw cancelled }
+                        catch (_: Exception) { emptyList() }
+                    candidates.take(24).forEach { stream ->
+                        if (seen.add(stream.url) && remaining.getAndDecrement() > 0) launch {
+                            limit.withPermit { if (available(stream,ref)) readyDirect.add(stream) }
+                        }
+                    }
+                } }
             }
-            Playback(direct,native.await())
-            }
-        } ?: error("видеосерверы не ответили вовремя")
-        if (playback.direct.isEmpty() && playback.native.isEmpty()) error("доступных видеоссылок для этой серии или фильма нет в текущей сети")
+            true
+        } ?: false
+        val playback = Playback(readyDirect.sortedByDescending { StreamTools.quality(it.resolution) },
+            readyNative.sortedBy { it.context.kind })
+        if (playback.direct.isEmpty() && playback.native.isEmpty()) {
+            if (!completed) error("видеосерверы не ответили вовремя")
+            error("доступных видеоссылок для этой серии или фильма нет в текущей сети")
+        }
         playback.native.forEach { native ->
             val hls = native.context.kind == "zona-hls-v1"
             val format = if (hls) "HLS · H.264" else "DASH · VP9"

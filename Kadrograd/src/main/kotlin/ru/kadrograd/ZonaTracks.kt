@@ -12,6 +12,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
@@ -163,7 +164,7 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
         alphabetCache = System.currentTimeMillis() to result
         return result
     }
-    suspend fun load(key: String, season: Int?, episode: Int?): List<Found> {
+    suspend fun load(key: String, season: Int?, episode: Int?, onFound: (Found) -> Unit) {
         require(key.matches(Regex("\\d+")))
         val embed = config().replace("{key}",key)
         val html = SourceHttp.get("Zona", embed, headers = headers, timeoutSeconds = 7).text
@@ -184,15 +185,15 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
         val names = media.path("audio").path("names").map { it.asText() }
         val base = Context(alphabet=alphabet(embed), parameter=parameter, epoch=epoch, observed=System.currentTimeMillis(), agent=ua)
         val subs = media.path("cc").mapNotNull { node -> node.path("url").asText().takeIf(StreamTools::isHttp)?.let { Sub(node.path("name").asText("Субтитры"),it) } }
-        return coroutineScope {
+        coroutineScope {
             listOf("dash","hls").mapNotNull { format -> media.path(format).asText().takeIf(StreamTools::isHttp)?.let { format to it } }
-                .map { (format,url) -> async {
+                .forEach { (format,url) -> launch {
                     try {
-                        if (format == "hls") ZonaHls.load(url,base,names,subs)
-                        else dash(url,base.copy(media=url),names,subs)
+                        onFound(if (format == "hls") ZonaHls.load(url,base,names,subs)
+                            else dash(url,base.copy(media=url),names,subs))
                     } catch (cancelled: CancellationException) { throw cancelled }
-                      catch (_: Exception) { null }
-                } }.mapNotNull { it.await() }
+                      catch (_: Exception) { }
+                } }
         }
     }
     private suspend fun dash(url: String, context: Context, names: List<String>, subs: List<Sub>): Found {
