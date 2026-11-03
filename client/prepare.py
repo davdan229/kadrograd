@@ -13,6 +13,9 @@ HASHES = {
     BASE + "ui/player/IGenerator.kt": "def8faa0e34926ee2dc9f7d1fce755f3df9b25163e74c7e8d7a9583d04c9b26b",
     BASE + "utils/downloader/DownloadManager.kt": "46b6aae840806c01a93981800ab9e4ed3e71129c577d4cc7ea6cf58ea9de3002",
     BASE + "utils/InAppUpdater.kt": "11e1a1fbc74f820d84b08a57e74f0e168b311e6e28e8f4d235047672dfc849e7",
+    BASE + "plugins/PluginManager.kt": "624f571a6cdb25fd4bc34c70e1b23ed541eb94fc34cf235d418a2e6975d6413e",
+    BASE + "ui/result/EpisodeAdapter.kt": "b377967f8b5663a3949836af46773cec8f83ef52c9cfb184de042c0626143f9e",
+    BASE + "ui/result/ResultFragmentPhone.kt": "f6dabd385895cb88f3201f632c413d337a4d72289b7f7d28bf87d9ffbe1967a1",
 }
 
 
@@ -38,6 +41,19 @@ def apply(root):
 
     path = "app/build.gradle.kts"
     text = changes[path]
+    text = replace_once(text, "    signingConfigs {\n", """    testBuildType = providers.gradleProperty("kadrogradTestBuildType").orElse("debug").get()
+    signingConfigs {
+        System.getenv("KADROGRAD_SIGNING_STORE_PATH")?.let { signingStore ->
+            create("kadrograd") {
+                storeFile = file(signingStore)
+                storePassword = System.getenv("KADROGRAD_SIGNING_PASSWORD")
+                keyAlias = "kadrograd"
+                keyPassword = System.getenv("KADROGRAD_SIGNING_PASSWORD")
+            }
+        }
+""")
+    text = replace_once(text, "        release {\n            isDebuggable = false", "        release {\n            signingConfig = signingConfigs.findByName(\"kadrograd\")\n            isDebuggable = false")
+    text = replace_once(text, "        debug {\n            isDebuggable = true", "        debug {\n            signingConfig = signingConfigs.findByName(\"kadrograd\") ?: signingConfigs.getByName(\"debug\")\n            isDebuggable = true")
     text = replace_once(text, 'applicationId = "com.lagradost.cloudstream3"', f'applicationId = "{CONFIG["applicationId"]}"')
     text = replace_once(text, "versionCode = libs.versions.versionCode.get().toInt()", f'versionCode = {CONFIG["versionCode"]}')
     text = replace_once(text, "versionName = libs.versions.versionName.get()", f'versionName = "{CONFIG["versionName"]}"')
@@ -65,6 +81,38 @@ def apply(root):
     changes[path] = replace_once(changes[path], "    ): Boolean {\n        val settingsManager = PreferenceManager.getDefaultSharedPreferences(this)",
         '    ): Boolean {\n        if (BuildConfig.APPLICATION_ID.startsWith("ru.kadrograd.")) return false\n        val settingsManager = PreferenceManager.getDefaultSharedPreferences(this)')
 
+    # Keep the explicit automatic-download action; only the normal button opens the picker.
+    path = BASE + "ui/result/EpisodeAdapter.kt"
+    text = changes[path]
+    before = "                                        ACTION_DOWNLOAD_EPISODE,"
+    after = "                                        ACTION_DOWNLOAD_MIRROR,"
+    if before in text:
+        if text.count(before) != 2:
+            raise ValueError("Unexpected episode download buttons")
+        text = text.replace(before, after)
+    changes[path] = text
+    path = BASE + "ui/result/ResultFragmentPhone.kt"
+    changes[path] = replace_once(changes[path], "requirePathForActions(listOf(ACTION_DOWNLOAD_EPISODE to ep))", "requirePathForActions(listOf(ACTION_DOWNLOAD_MIRROR to ep))")
+
+    path = BASE + "plugins/PluginManager.kt"
+    changes[path] = replace_once(changes[path], """    suspend fun ___DO_NOT_CALL_FROM_A_PLUGIN_loadAllOnlinePlugins(context: Context) {
+        assertNonRecursiveCallstack()
+""", """    suspend fun ___DO_NOT_CALL_FROM_A_PLUGIN_loadAllOnlinePlugins(context: Context) {
+        assertNonRecursiveCallstack()
+        try {
+            val previous = getPluginsOnline().filter { it.internalName == "Kadrograd" }
+            val bundled = BundledSources.prepare(context, getPluginsOnline())
+            if (bundled != null) {
+                if (loadPlugin(context, File(bundled.filePath), bundled)) {
+                    previous.filter { it.filePath != bundled.filePath }.forEach { deletePluginData(it) }
+                    RepositoryManager.addRepository(RepositoryData("Кадроград", BundledSources.repositoryUrl))
+                } else deletePluginData(bundled)
+            }
+        } catch (error: Exception) {
+            logError(error)
+        }
+""")
+
     for relative, text in changes.items():
         (root / relative).write_text(text, encoding="utf-8", newline="\n")
     for source in (HERE / "overlay").rglob("*"):
@@ -77,6 +125,8 @@ def apply(root):
         import re
         label = "Кадроград" if path.parent.name == "values-ru" else "Kadrograd"
         text = re.sub(r'(<string name="app_name">)[^<]*(</string>)', rf'\g<1>{label}\g<2>', text)
+        picker = "Выбрать качество и озвучку" if path.parent.name == "values-ru" else "Choose quality and voice"
+        text = re.sub(r'(<string name="episode_action_download_mirror">)[^<]*(</string>)', rf'\g<1>{picker}\g<2>', text)
         path.write_text(text, encoding="utf-8", newline="\n")
     marker.write_text(json.dumps({p: hashlib.sha256((root / p).read_bytes()).hexdigest() for p in HASHES}, indent=2))
     print("Prepared Kadrograd", CONFIG["versionName"], "from", CONFIG["revision"])

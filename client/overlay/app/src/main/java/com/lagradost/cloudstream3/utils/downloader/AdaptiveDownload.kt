@@ -2,7 +2,6 @@ package com.lagradost.cloudstream3.utils.downloader
 
 import android.content.Context
 import android.media.metrics.LogSessionId
-import androidx.media3.common.C
 import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
@@ -122,9 +121,9 @@ object AdaptiveDownload {
         context: Context, link: ExtractorLink, apiName: String?, name: String, folder: String,
         id: Int, callback: (CreateNotificationMetadata) -> Unit,
     ): DownloadStatus = withContext(Dispatchers.Main.immediate) {
-        val metadata = DownloadMetaData(id = id, linkHash = link.url.hashCode(), createNotificationCallback = callback, isHLS = true)
         val directory = File(context.filesDir, "adaptive-downloads").apply { mkdirs() }
         val output = File.createTempFile("$id-", ".mp4", directory)
+        val metadata = DownloadMetaData(id = id, linkHash = link.url.hashCode(), createNotificationCallback = callback, isHLS = true)
         var destination: DownloadObjects.StreamData? = null
         var complete = false
         try {
@@ -158,6 +157,7 @@ object AdaptiveDownload {
                 VideoDownloadManager.setupStream(baseFile, uniqueName, folder, "mp4", false)
             }
             destination = stream
+            var stopped = false
             withContext(Dispatchers.IO) {
                 output.inputStream().use { input ->
                     stream.open().use { target ->
@@ -165,7 +165,7 @@ object AdaptiveDownload {
                         while (true) {
                             coroutineContext.ensureActive()
                             val state = withContext(Dispatchers.Main.immediate) { metadata.type }
-                            if (state == DownloadType.IsStopped) throw CancellationException("Download stopped")
+                            if (state == DownloadType.IsStopped) { stopped = true; break }
                             if (state == DownloadType.IsPaused) { delay(200); continue }
                             val count = input.read(buffer)
                             if (count < 0) break
@@ -174,6 +174,8 @@ object AdaptiveDownload {
                     }
                 }
             }
+            coroutineContext.ensureActive()
+            if (stopped || metadata.type == DownloadType.IsStopped) return@withContext DownloadStatus(false, false, true)
             metadata.bytesDownloaded = length
             metadata.bytesWritten = length
             metadata.hlsProgress = 100

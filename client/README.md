@@ -8,10 +8,15 @@
 git clone https://github.com/recloudstream/cloudstream.git upstream
 git -C upstream checkout 3796406e636356f556c16e04e1da4e37d6a19038
 python3 client/prepare.py upstream
+./gradlew :Kadrograd:make makePluginsJson
+python3 client/bundle_sources.py upstream
+python3 client/make_test_media.py upstream/app/src/androidTest/assets/adaptive
 cd upstream
 ./gradlew :app:assembleStableDebug :app:assembleStableDebugAndroidTest
 ```
 
 Разработка загрузчика продолжается. Тестовая сборка не является проверенным выпуском. При паузе сохранение DASH останавливается, после продолжения начинается заново; сохранение прогресса между перезапусками ещё не реализовано. Для сборки MP4 сначала требуется место во внутреннем хранилище, затем файл копируется в выбранную папку. Обновление APK из официального репозитория CloudStream отключено из-за другого пакета и сертификата.
+
+Обычная кнопка скачивания открывает выбор качества и озвучки. Автоматическая загрузка остаётся отдельным действием в меню. Расширение включается в APK из того же исходного состояния; при установке проверяется его SHA-256. Уже установленная более новая версия расширения сохраняется.
 
 CloudStream распространяется по GNU GPL v3; лицензия, сведения об авторах и сторонних компонентах сохраняются в исходной сборке. Изменения клиента также распространяются по GNU GPL v3, см. [LICENSE](../LICENSE).

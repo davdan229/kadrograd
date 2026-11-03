@@ -37,11 +37,36 @@ jobs:
           sudo apt-get install --no-install-recommends -y ffmpeg
           python3 client/prepare.py .client-work/upstream
           python3 client/make_test_media.py .client-work/upstream/app/src/androidTest/assets/adaptive
-      - name: Build Android client and tests
-        working-directory: .client-work/upstream
+      - name: Build and bundle extension
         run: |
           chmod +x gradlew
-          ./gradlew :app:assembleStableDebug :app:assembleStableDebugAndroidTest :app:testStableDebugUnitTest --console=plain --max-workers=2 -Dorg.gradle.jvmargs=-Xmx3g -Pkotlin.compiler.execution.strategy=in-process
+          ./gradlew :Kadrograd:testDebugUnitTest :Kadrograd:make makePluginsJson --console=plain --max-workers=2
+          python3 -m unittest discover -s scripts -p 'test_package_repo.py'
+          python3 scripts/package_repo.py
+          python3 client/bundle_sources.py .client-work/upstream
+          ./gradlew --stop
+      - name: Build Android client and tests
+        working-directory: .client-work/upstream
+        env:
+          KADROGRAD_SIGNING_STORE: ${{ secrets.KADROGRAD_SIGNING_STORE }}
+          KADROGRAD_SIGNING_PASSWORD: ${{ secrets.KADROGRAD_SIGNING_PASSWORD }}
+        run: |
+          export KADROGRAD_SIGNING_STORE_PATH="$RUNNER_TEMP/kadrograd-signing.p12"
+          python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          key = os.environ['KADROGRAD_SIGNING_STORE']
+          assert key, 'APK signing key is not configured'
+          path = Path(os.environ['KADROGRAD_SIGNING_STORE_PATH'])
+          path.write_bytes(base64.b64decode(key, validate=True))
+          path.chmod(0o600)
+          PY
+          trap 'rm -f "$KADROGRAD_SIGNING_STORE_PATH"' EXIT
+          chmod +x gradlew
+          ./gradlew :app:assembleStableRelease :app:assembleStableReleaseAndroidTest :app:testStableReleaseUnitTest -PkadrogradTestBuildType=release --console=plain --max-workers=2 -Dorg.gradle.jvmargs=-Xmx3g -Pkotlin.compiler.execution.strategy=in-process
+          ./gradlew --stop
+      - name: Verify APK identity and signature
+        run: python3 client/verify_apk.py .client-work/upstream/app/build/outputs/apk/stable/release/app-stable-release.apk
       - name: Verify adaptive downloads on Android
         timeout-minutes: 12
         run: bash client/run_android_checks.sh .client-work/upstream
