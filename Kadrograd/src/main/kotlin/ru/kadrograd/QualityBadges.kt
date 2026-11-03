@@ -17,7 +17,7 @@ internal class QualityBadges(
 
     @Synchronized
     fun observe(url: String, variants: List<ZonaTracks.Variant>) {
-        if (!variants.any { it.width >= 3840 && it.height >= 1440 } || !StreamTools.isHttp(url)) return
+        if (!variants.any { it.isFourK } || !StreamTools.isHttp(url)) return
         val time = now()
         entries.entries.removeAll { time-it.value !in 0..ttl }
         entries.remove(url)

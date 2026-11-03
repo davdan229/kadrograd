@@ -294,7 +294,7 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
                 val audio = tracks.values.distinct().singleOrNull() ?: "озвучек: ${tracks.values.distinct().size}"
                 callback(newExtractorLink(name,"Zona · ${variant.dimensions} · $audio · $format",
                     native.url + "#kg-${variant.width}x${variant.height}",if (hls) ExtractorLinkType.M3U8 else ExtractorLinkType.DASH) {
-                    quality = variant.height; referer = ref; headers = this@ZonaProvider.headers
+                    quality = variant.playbackQuality; referer = ref; headers = this@ZonaProvider.headers
                     extractorData = native.context.copy(width=variant.width,height=variant.height,voices=tracks).toJson()
                 })
             }
@@ -307,7 +307,7 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
             val format = if (hls) "HLS · H.264" else "DASH · VP9"
             callback(newExtractorLink(name,"Zona · $label · ${variant.dimensions} · $format",
                 native.url + "#kg-${variant.width}x${variant.height}-voice-$index",if (hls) ExtractorLinkType.M3U8 else ExtractorLinkType.DASH) {
-                quality = variant.height; referer = ref; headers = this@ZonaProvider.headers
+                quality = variant.playbackQuality; referer = ref; headers = this@ZonaProvider.headers
                 extractorData = native.context.copy(width=variant.width,height=variant.height,voices=mapOf(id to label)).toJson()
             })
         }

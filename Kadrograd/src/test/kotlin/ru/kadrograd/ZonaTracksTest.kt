@@ -10,6 +10,14 @@ import java.net.URI
 import kotlin.io.encoding.Base64
 
 class ZonaTracksTest {
+    @Test fun wideFourKUsesUhdQualityWithoutChangingFrameDimensions() {
+        val wide = ZonaTracks.Variant(3840,1608)
+        assertEquals(2160,wide.playbackQuality)
+        assertEquals("3840×1608",wide.dimensions)
+        assertEquals(1440,ZonaTracks.Variant(2560,1440).playbackQuality)
+        assertEquals(1080,ZonaTracks.Variant(1920,1080).playbackQuality)
+    }
+
     @Test fun namedVoiceChoicesPreferFullHdAndKeepVoicesAvailableOnlyInHls() {
         val primary = ZonaTracks.Found("https://video.cdn.example/main.mpd",
             context().copy(voices=mapOf("2" to "Сыендук","3" to "Оригинал")),

@@ -33,6 +33,8 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
 
     data class Variant(val width: Int, val height: Int) {
         val dimensions get() = "${width}×$height"
+        val isFourK get() = width >= 3840 && height >= 1440
+        val playbackQuality get() = if (isFourK) 2160 else height
     }
     data class Found(val url: String, val context: Context, val variants: List<Variant>, val subtitles: List<Sub>,
         val voiceVariants: Map<String,List<Variant>> = emptyMap()) {
