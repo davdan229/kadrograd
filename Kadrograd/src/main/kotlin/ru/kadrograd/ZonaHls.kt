@@ -5,6 +5,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import java.net.URI
@@ -57,11 +58,12 @@ internal object ZonaHls {
     fun rewrite(text: String, context: ZonaTracks.Context): String {
         val master = parse(text,context.media)
         if (master.videos.isEmpty()) return text
-        val selected = master.videos.filter { it.key in context.streams && it.variant == ZonaTracks.Variant(context.width,context.height) }
-        require(selected.isNotEmpty())
-        val groups = selected.mapNotNull { it.attributes["AUDIO"] }.toSet()
+        val candidates = master.videos.filter { it.key in context.streams && it.variant == ZonaTracks.Variant(context.width,context.height) }
+        val groups = candidates.mapNotNull { it.attributes["AUDIO"] }.toSet()
         val audio = master.audio.filter { it.key in context.voices && it.attributes["GROUP-ID"] in groups }
-        require(audio.isNotEmpty())
+        val activeGroups = audio.mapNotNull { it.attributes["GROUP-ID"] }.toSet()
+        val selected = candidates.filter { it.attributes["AUDIO"] in activeGroups }
+        require(selected.isNotEmpty())
         val output = mutableListOf<String>(); var skipVideoUri = false
         val defaults = mutableSetOf<String>()
         for ((index,line) in master.lines.withIndex()) {
@@ -116,19 +118,35 @@ internal object ZonaHls {
         val labels = labels(master,names)
         val compatible = master.videos.filter { it.attributes["CODECS"].orEmpty().split(',').any { codec -> codec.trim().startsWith("avc1.") } }
         val groups = compatible.mapNotNull { it.attributes["AUDIO"] }.distinct()
+        val videos = mutableListOf<Video>()
+        val voices = linkedMapOf<String,String>()
+        val voiceVariants = linkedMapOf<String,List<ZonaTracks.Variant>>()
+        val covered = mutableSetOf<Pair<String,ZonaTracks.Variant>>()
+        val limit = Semaphore(6)
         for (group in groups) {
             val video = compatible.filter { it.attributes["AUDIO"] == group }
             val audio = master.audio.filter { it.attributes["GROUP-ID"] == group && it.key in labels }
-            if (audio.isEmpty()) continue
-            val limit = Semaphore(6)
-            val results = (video.map { it.url }+audio.map { it.url }).distinct().map { target ->
-                async { limit.withPermit { target to probe(target,hls) } }
-            }.map { it.await() }.toMap()
+            if (audio.none { track -> video.any { (labels.getValue(track.key) to it.variant) !in covered } }) continue
+            suspend fun checkGroup() = coroutineScope {
+                (video.map { it.url }+audio.map { it.url }).distinct().map { target ->
+                    async { limit.withPermit { target to probe(target,hls) } }
+                }.map { it.await() }.toMap()
+            }
+            val results = if (videos.isEmpty()) checkGroup() else withTimeoutOrNull(5_000) { checkGroup() } ?: break
             val available = video.filter { results[it.url] == true }
-            val voices = labels.filterKeys { key -> audio.any { it.key == key && results[it.url] == true } }
-            if (available.isNotEmpty() && voices.isNotEmpty()) return@coroutineScope ZonaTracks.Found(url,
-                hls.copy(streams=available.map { it.key },voices=voices),available.map { it.variant }.distinct().sortedByDescending { it.height },subtitles)
+            val tracks = audio.filter { results[it.url] == true }
+            if (available.isEmpty() || tracks.isEmpty()) continue
+            videos += available
+            val variants = available.map { it.variant }.distinct()
+            for (track in tracks) {
+                val label = labels.getValue(track.key)
+                voices[track.key] = label
+                voiceVariants[track.key] = variants
+                covered += variants.map { label to it }
+            }
         }
-        throw com.lagradost.cloudstream3.ErrorLoadingException("Zona: проверенные HLS-видео и озвучки недоступны")
+        if (videos.isEmpty()) throw com.lagradost.cloudstream3.ErrorLoadingException("Zona: проверенные HLS-видео и озвучки недоступны")
+        ZonaTracks.Found(url,hls.copy(streams=videos.map { it.key },voices=voices),
+            videos.map { it.variant }.distinct().sortedByDescending { it.height },subtitles,voiceVariants)
     }
 }

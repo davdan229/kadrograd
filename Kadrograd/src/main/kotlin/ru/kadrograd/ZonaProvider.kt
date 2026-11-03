@@ -293,12 +293,13 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         playback.native.forEach { native ->
             val hls = native.context.kind == "zona-hls-v1"
             val format = if (hls) "HLS · H.264" else "DASH · VP9"
-            val audio = native.context.voices.values.singleOrNull() ?: "озвучек: ${native.context.voices.size}"
             for (variant in native.variants) {
+                val tracks = native.voicesFor(variant)
+                val audio = tracks.values.distinct().singleOrNull() ?: "озвучек: ${tracks.values.distinct().size}"
                 callback(newExtractorLink(name,"Zona · ${variant.dimensions} · $audio · $format",
                     native.url + "#kg-${variant.width}x${variant.height}",if (hls) ExtractorLinkType.M3U8 else ExtractorLinkType.DASH) {
                     quality = variant.height; referer = ref; headers = this@ZonaProvider.headers
-                    extractorData = native.context.copy(width=variant.width,height=variant.height).toJson()
+                    extractorData = native.context.copy(width=variant.width,height=variant.height,voices=tracks).toJson()
                 })
             }
         }

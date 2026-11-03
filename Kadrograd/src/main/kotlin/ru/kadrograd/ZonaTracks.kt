@@ -34,7 +34,10 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
     data class Variant(val width: Int, val height: Int) {
         val dimensions get() = "${width}×$height"
     }
-    data class Found(val url: String, val context: Context, val variants: List<Variant>, val subtitles: List<Sub>)
+    data class Found(val url: String, val context: Context, val variants: List<Variant>, val subtitles: List<Sub>,
+        val voiceVariants: Map<String,List<Variant>> = emptyMap()) {
+        fun voicesFor(variant: Variant) = context.voices.filterKeys { id -> voiceVariants[id]?.contains(variant) ?: true }
+    }
     data class Sub(val name: String, val url: String)
     data class VoiceChoice(val found: Found, val variant: Variant, val id: String, val name: String)
     data class Context(@JsonProperty("kind") val kind: String = "zona-dash-v1",
@@ -64,9 +67,11 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
         const val LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
         fun voiceChoices(sources: List<Found>): List<VoiceChoice> =
             sources.flatMap { found ->
-                val variant = found.variants.maxWithOrNull(compareBy<Variant> { it.height == 1080 }.thenBy { it.height })
-                    ?: return@flatMap emptyList()
-                found.context.voices.map { (id,name) -> VoiceChoice(found,variant,id,name) }
+                found.context.voices.mapNotNull { (id,name) ->
+                    val variant = (found.voiceVariants[id] ?: found.variants)
+                        .maxWithOrNull(compareBy<Variant> { it.height == 1080 }.thenBy { it.height })
+                    variant?.let { VoiceChoice(found,it,id,name) }
+                }
             }.sortedWith(compareByDescending<VoiceChoice> { it.variant.height == 1080 }.thenByDescending { it.variant.height })
                 .distinctBy { it.name.trim().lowercase(java.util.Locale.ROOT) }
 
@@ -122,13 +127,23 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
             }
             doc.getElementsByTag("AdaptationSet").forEach { track ->
                 if (track.attr("contentType") == "audio") {
-                    val id = track.getElementsByTag("Representation").firstOrNull()?.attr("id")
-                    val name = id?.let { context.voices[it] }
+                    val reps = track.getElementsByTag("Representation")
+                    val name = reps.firstNotNullOfOrNull { context.voices[it.attr("id")] }
                     if (name == null && context.voices.isNotEmpty()) { track.remove(); return@forEach }
                     if (name != null) {
+                        reps.filter { context.voices[it.attr("id")] != name }.forEach(Element::remove)
                         track.getElementsByTag("Label").forEach(Element::remove)
                         track.prependElement("Label").text(name)
-                        track.attr("lang", when { name.contains("Укр",true) -> "uk"; name.contains("Eng",true) || name.contains("Original",true) -> "en"; else -> "ru" })
+                        val originalLanguage = track.attr("lang")
+                        val language = when {
+                            name.contains("укр",true) -> "uk"
+                            name.contains("eng",true) || name.contains("англий",true) -> "en"
+                            name.contains("jpn",true) || name.contains("jap",true) || name.contains("япон",true) -> "ja"
+                            name.contains("original",true) || name.contains("оригинал",true) ->
+                                originalLanguage.takeUnless { it.matches(Regex("ru\\d+")) }?.replace(Regex("\\d+$"),"").orEmpty()
+                            else -> originalLanguage.replace(Regex("\\d+$"),"").ifBlank { "ru" }
+                        }
+                        if (language.isBlank()) track.removeAttr("lang") else track.attr("lang",language)
                     }
                 }
             }

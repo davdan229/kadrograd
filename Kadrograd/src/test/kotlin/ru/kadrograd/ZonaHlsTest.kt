@@ -59,7 +59,7 @@ class ZonaHlsTest {
         val bad = master().replace("720.m3u8","file:///tmp/video")
         assertThrows(IllegalArgumentException::class.java) { ZonaHls.parse(bad,base) }
     }
-    @Test fun liveResolverExcludesFailedAudioAndVideoButRetainsWorkingLowerResolution() = runBlocking {
+    @Test fun resolverKeepsWorkingQualitiesAndVoicesAcrossAudioGroups() = runBlocking {
         MockWebServer().use { server ->
             server.dispatcher = object: Dispatcher() {
                 override fun dispatch(request: RecordedRequest): MockResponse {
@@ -68,7 +68,8 @@ class ZonaHlsTest {
                     return when(path) {
                         "master.m3u8" -> MockResponse.Builder().body(master()).build()
                         "a0.m3u8","720.m3u8" -> MockResponse.Builder().code(404).body("missing").build()
-                        "a1.m3u8","360.m3u8" -> MockResponse.Builder().body("#EXTM3U\n#EXTINF:10,\n1.ts\n#EXTINF:10,\n2.ts\n#EXT-X-ENDLIST\n").build()
+                        "a1.m3u8","360.m3u8","backup-a0.m3u8","backup-720.m3u8" ->
+                            MockResponse.Builder().body("#EXTM3U\n#EXTINF:10,\n1.ts\n#EXTINF:10,\n2.ts\n#EXT-X-ENDLIST\n").build()
                         "1.ts","2.ts" -> MockResponse.Builder().code(206).body("G"+"x".repeat(31)).build()
                         else -> MockResponse.Builder().code(500).body(path).build()
                     }
@@ -77,9 +78,15 @@ class ZonaHlsTest {
             server.start()
             val url = server.url("/master.m3u8").toString()
             val found = ZonaHls.load(url,context(url),names,emptyList())
-            assertEquals(listOf(ZonaTracks.Variant(640,360)),found.variants)
-            assertEquals(listOf(names[1]),found.context.voices.values.toList())
-            val client = OkHttpClient.Builder().addInterceptor(ZonaTracks.interceptor(found.context.copy(width=640,height=360))).build()
+            val lower = ZonaTracks.Variant(640,360)
+            val higher = ZonaTracks.Variant(1280,720)
+            assertEquals(listOf(higher,lower),found.variants)
+            assertEquals(listOf(names[1]),found.voicesFor(lower).values.toList())
+            assertEquals(listOf(names[0]),found.voicesFor(higher).values.toList())
+            assertEquals(mapOf(names[0] to higher,names[1] to lower),
+                ZonaTracks.voiceChoices(listOf(found)).associate { it.name to it.variant })
+            val client = OkHttpClient.Builder().addInterceptor(ZonaTracks.interceptor(
+                found.context.copy(width=640,height=360,voices=found.voicesFor(lower)))).build()
             fun get(target: String) = client.newCall(Request.Builder().url(target).build()).execute().use {
                 assertTrue(it.isSuccessful)
                 it.body.string()

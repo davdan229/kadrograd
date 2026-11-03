@@ -65,6 +65,15 @@ class ZonaTracksTest {
         assertEquals(listOf("10","11"),tracks.map { it.attr("id") })
     }
 
+    @Test fun dashKeepsAvailableRepresentationWhenFirstAudioEncodingFailed() {
+        val xml = mpd().replace("<Representation id=\"0\"","<Representation id=\"unavailable\"/><Representation id=\"0\"")
+        val document = ZonaTracks.manifest(ZonaTracks.rewriteManifest(xml,context().copy(voices=mapOf("0" to "Японский оригинал"))))
+        val track = document.getElementsByTag("AdaptationSet").single { it.attr("contentType") == "audio" }
+        assertEquals(listOf("0"),track.getElementsByTag("Representation").map { it.attr("id") })
+        assertEquals("ja",track.attr("lang"))
+        assertEquals("Японский оригинал",track.getElementsByTag("Label").single().text())
+    }
+
     @Test fun languageSlotsMapVoicesEvenWhenVideoUsesIdZero() {
         val doc = ZonaTracks.manifest("""<MPD><Period>
             <AdaptationSet contentType="audio" lang="ru0"><Representation id="2"/></AdaptationSet>
