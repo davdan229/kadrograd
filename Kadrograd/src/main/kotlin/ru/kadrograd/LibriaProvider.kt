@@ -16,9 +16,7 @@ class LibriaProvider(baseUrl: String) : QualityProvider() {
     override val hasMainPage = true
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
-    override val mainPage = mainPageOf(
-        "all" to "Каталог", "movies" to "Фильмы", "series" to "Сериалы", "ongoing" to "Сейчас выходят"
-    )
+    override val mainPage = animeHomePage
     private val api get() = "$mainUrl/api/v1"
 
     private fun kind(release: Release) = when (release.type?.value) {

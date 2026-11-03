@@ -25,9 +25,7 @@ class VostProvider(baseUrl: String) : QualityProvider() {
     override val hasMainPage = true
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
-    override val mainPage = mainPageOf(
-        "all" to "Каталог", "movies" to "Фильмы", "series" to "Сериалы", "ongoing" to "Сейчас выходят"
-    )
+    override val mainPage = animeHomePage
     private val probes = Semaphore(4)
     private val pagePaths = java.util.Collections.synchronizedMap(object : LinkedHashMap<Int,String>(64,0.75f,true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int,String>) = size > 256

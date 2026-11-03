@@ -29,7 +29,7 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
     override val hasDownloadSupport = false
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Cartoon, TvType.Anime, TvType.AnimeMovie)
     override val mainPage = mainPageOf(
-        "all" to "Каталог", "movies" to "Фильмы", "series" to "Сериалы",
+        "movies" to "Фильмы", "series" to "Сериалы",
         "movies/filter?genre=multfilm" to "Мультфильмы",
         "series/filter?genre=multfilm" to "Мультсериалы",
         "series/filter?genre=anime" to "Аниме-сериалы", "movies/filter?genre=anime" to "Аниме-фильмы"
@@ -73,28 +73,10 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         require(page > 0)
         if (mainPage.none { it.data == request.data }) error("неизвестный раздел")
-        suspend fun category(data: String): Pair<List<SearchResponse>, Boolean> {
-            val url = "$mainUrl/api/$data${if ('?' in data) '&' else '?'}page=$page"
-            val result = json<Catalog>(url)
-            return result.data.mapNotNull { card(it, data.startsWith("series"), data) }.distinctBy { it.url } to
-                !result.links?.next.isNullOrBlank()
-        }
-        if (request.data != "all") {
-            val (cards, hasNext) = category(request.data)
-            return newHomePageResponse(request.name, cards, hasNext)
-        }
-        val sections = coroutineScope {
-            listOf("movies", "series").map { data -> async {
-                try { Result.success(category(data)) }
-                catch (failure: ErrorLoadingException) { Result.failure(failure) }
-            } }.awaitAll()
-        }
-        val available = sections.mapNotNull { it.getOrNull() }
-        if (available.isEmpty()) throw sections.first().exceptionOrNull()!!
-        val cards = (0 until available.maxOf { it.first.size }).flatMap { index ->
-            available.mapNotNull { it.first.getOrNull(index) }
-        }
-        return newHomePageResponse(request.name, cards, available.any { it.second })
+        val url = "$mainUrl/api/${request.data}${if ('?' in request.data) '&' else '?'}page=$page"
+        val result = json<Catalog>(url)
+        return newHomePageResponse(request.name, result.data.mapNotNull { card(it, request.data.startsWith("series"), request.data) },
+            hasNext = !result.links?.next.isNullOrBlank())
     }
     override suspend fun search(query: String): List<SearchResponse> {
         val input = query.trim()
