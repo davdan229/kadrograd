@@ -22,6 +22,7 @@ jobs:
         run: |
           chmod +x gradlew
           ./gradlew :Kadrograd:testDebugUnitTest :Kadrograd:make makePluginsJson --console=plain
+          python3 -m unittest discover -s scripts -p 'test_package_repo.py'
           python3 scripts/package_repo.py
       - name: Publish repository files
         env:
@@ -39,7 +40,7 @@ jobs:
             mkdir publish
             git -C publish init -b builds
           fi
-          cp dist/* publish/
+          cp -r dist/. publish/
           cd publish
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
