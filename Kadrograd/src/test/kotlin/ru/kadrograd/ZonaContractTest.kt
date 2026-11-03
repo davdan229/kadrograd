@@ -57,6 +57,22 @@ class ZonaContractTest {
         assertEquals(base, provider.mainUrl)
         assertFalse(provider.hasDownloadSupport)
     }
+    @Test fun sharedCatalogInterleavesMoviesAndSeriesAndSurvivesOneUnavailableCategory() = runBlocking {
+        var seriesStatus = 200
+        reply = { request ->
+            if (request.url.encodedPath == "/api/series") seriesStatus to
+                """{"data":[{"slug":"series","title":"Сериал"}]}"""
+            else 200 to """{"data":[{"slug":"film","title":"Фильм"}],"links":{"next":"?page=2"}}"""
+        }
+        val request = MainPageRequest("Каталог", "all", false)
+        val both = provider.getMainPage(1, request)
+        assertEquals(listOf(TvType.Movie, TvType.TvSeries), both.items.single().list.map { it.type })
+        assertTrue(both.hasNext)
+        seriesStatus = 403
+        val available = provider.getMainPage(2, request)
+        assertEquals(listOf(TvType.Movie), available.items.single().list.map { it.type })
+        assertTrue(available.hasNext)
+    }
     @Test fun searchEncodesQueryAndDoesNotIncludeVideosFiltersOrTrailers() = runBlocking {
         reply = { 200 to """<title>Результаты поиска по запросу — Zona</title>
             <a title="Менталист" href="/tvseries/mentalist-2008"><img alt="Сериал Менталист (2008)" src="/poster.jpg"></a>

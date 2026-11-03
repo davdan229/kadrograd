@@ -17,7 +17,7 @@ class LibriaProvider(baseUrl: String) : QualityProvider() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
     override val mainPage = mainPageOf(
-        "ongoing" to "Сейчас выходят", "movies" to "Аниме-фильмы", "all" to "Всё аниме"
+        "all" to "Каталог", "movies" to "Фильмы", "series" to "Сериалы", "ongoing" to "Сейчас выходят"
     )
     private val api get() = "$mainUrl/api/v1"
 
@@ -44,6 +44,7 @@ class LibriaProvider(baseUrl: String) : QualityProvider() {
         val extra = when (request.data) {
             "ongoing" -> "&f[publish_statuses]=IS_ONGOING"
             "movies" -> "&f[types]=MOVIE"
+            "series" -> "&f[types]=TV"
             else -> ""
         }
         val raw = SourceHttp.get("AniLibria", "$api/anime/catalog/releases?limit=24&page=$page$extra")

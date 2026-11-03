@@ -1,4 +1,4 @@
-version = 19
+version = 20
 cloudstream {
     description = "Кадроград: Zona для кино и сериалов, AniLibria и AnimeVost для аниме. Проверка видеоссылок и ограниченное ожидание. Возможности зависят от источника."
     authors = listOf("davdan229", "hexated", "lxnhere")

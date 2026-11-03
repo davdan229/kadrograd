@@ -26,7 +26,7 @@ class VostProvider(baseUrl: String) : QualityProvider() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
     override val mainPage = mainPageOf(
-        "ongoing" to "Сейчас выходят", "movies" to "Аниме-фильмы", "all" to "Всё аниме"
+        "all" to "Каталог", "movies" to "Фильмы", "series" to "Сериалы", "ongoing" to "Сейчас выходят"
     )
     private val probes = Semaphore(4)
     private val pagePaths = java.util.Collections.synchronizedMap(object : LinkedHashMap<Int,String>(64,0.75f,true) {
@@ -70,6 +70,7 @@ class VostProvider(baseUrl: String) : QualityProvider() {
         val section = when (request.data) {
             "ongoing" -> "/ongoing/"
             "movies" -> "/tip/polnometrazhnyy-film/"
+            "series" -> "/tip/tv/"
             else -> "/"
         }
         val doc = document(mainUrl + section + if (page <= 1) "" else "page/$page/")
