@@ -67,6 +67,18 @@ class ZonaContractTest {
         provider.badges.observe("$base/tvseries/mentalist-2008",listOf(ZonaTracks.Variant(3840,2160)))
         assertEquals(SearchQuality.FourK,provider.search("Менталист").single().quality)
     }
+    @Test fun emptySearchRetriesShorterQueriesAndOnlyReturnsCloseTitles() = runBlocking {
+        reply = { request ->
+            val cards = if (request.url.pathSegments.last() == "мента") """
+                <a title="Мент в законе" href="/tvseries/ment-v-zakone"><img></a>
+                <a title="Менталист" href="/tvseries/mentalist-2008"><img></a>
+            """ else ""
+            200 to "<title>Результаты поиска по запросу — Zona</title>$cards"
+        }
+        assertEquals(listOf("Менталист"),provider.search("Менталсит").map { it.name })
+        assertEquals("Менталсит",requests.first().url.pathSegments.last())
+        assertTrue(requests.size <= 4)
+    }
     @Test fun allPublishedSeasonsUseExactSeasonAndEpisodeNumbers() = runBlocking {
         setup()
         val loaded = provider.load("$base/tvseries/mentalist-2008") as TvSeriesLoadResponse

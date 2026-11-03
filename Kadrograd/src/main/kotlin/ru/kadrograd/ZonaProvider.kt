@@ -77,12 +77,33 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
             hasNext = !result.links?.next.isNullOrBlank())
     }
     override suspend fun search(query: String): List<SearchResponse> {
-        if (query.isBlank()) return emptyList()
-        val url = "$mainUrl/search/${escaped(query.trim())}"
+        val input = query.trim()
+        if (input.isBlank()) return emptyList()
+        val results = searchOnce(input)
+        val title = ZonaSearch.normalize(input)
+        if (results.isNotEmpty()) {
+            return results.sortedByDescending { ZonaSearch.normalize(it.name) == title }
+        }
+        return coroutineScope {
+            ZonaSearch.probes(input).map { probe ->
+                async {
+                    withTimeoutOrNull(4_000) {
+                        try { searchOnce(probe) }
+                        catch (_: ErrorLoadingException) { emptyList() }
+                    }.orEmpty()
+                }
+            }.awaitAll().flatten().distinctBy { it.url }.mapNotNull { result ->
+                ZonaSearch.distance(title, ZonaSearch.normalize(result.name))?.let { it to result }
+            }.sortedBy { it.first }.map { it.second }
+        }
+    }
+
+    private suspend fun searchOnce(query: String): List<SearchResponse> {
+        val url = "$mainUrl/search/${escaped(query)}"
         // The compressed HTML response can stall after HTTP 200; the JSON endpoints use the normal encoding.
         val html = SourceHttp.getCatalogOrNull("Zona", url, referer = "$mainUrl/",
             headers = headers + mapOf("Accept" to "text/html", "Accept-Encoding" to "identity"))
-            ?: return suggestions(query.trim()) ?: error("не удалось получить ответ поиска через эту сеть")
+            ?: return suggestions(query) ?: error("не удалось получить ответ поиска через эту сеть")
         val doc = org.jsoup.Jsoup.parse(html,url)
         if (!doc.title().contains("Результаты поиска", true)) error("поиск недоступен или изменился")
         return doc.select("a[title][href]").mapNotNull { a ->
