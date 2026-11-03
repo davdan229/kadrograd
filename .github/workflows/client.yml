@@ -4,8 +4,14 @@ on:
     branches: [client-downloads]
     paths: ['client/**', '.github/workflows/client.yml']
   workflow_dispatch:
+    inputs:
+      reuse_run:
+        description: 'Recheck an existing signed APK from this workflow run ID'
+        required: false
+        type: string
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: kadrograd-client-${{ github.ref }}
   cancel-in-progress: true
@@ -32,12 +38,14 @@ jobs:
           cache-dependency-path: client/upstream.json
       - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
       - name: Prepare pinned client source
+        if: inputs.reuse_run == ''
         run: |
           sudo apt-get update -qq
           sudo apt-get install --no-install-recommends -y ffmpeg
           python3 client/prepare.py .client-work/upstream
           python3 client/make_test_media.py .client-work/upstream/app/src/androidTest/assets/adaptive
       - name: Build and bundle extension
+        if: inputs.reuse_run == ''
         run: |
           chmod +x gradlew
           ./gradlew :Kadrograd:testDebugUnitTest :Kadrograd:make makePluginsJson --console=plain --max-workers=2
@@ -46,6 +54,7 @@ jobs:
           python3 client/bundle_sources.py .client-work/upstream
           ./gradlew --stop
       - name: Build Android client and tests
+        if: inputs.reuse_run == ''
         working-directory: .client-work/upstream
         env:
           KADROGRAD_SIGNING_STORE: ${{ secrets.KADROGRAD_SIGNING_STORE }}
@@ -65,6 +74,14 @@ jobs:
           chmod +x gradlew
           ./gradlew :app:assembleStableRelease :app:assembleStableReleaseAndroidTest :app:testStableReleaseUnitTest -PkadrogradTestBuildType=release --console=plain --max-workers=2 -Dorg.gradle.jvmargs=-Xmx3g -Pkotlin.compiler.execution.strategy=in-process
           ./gradlew --stop
+      - name: Fetch existing signed APK for device checks
+        if: inputs.reuse_run != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.reuse_run }}
+          name: kadrograd-client-checks
+          path: .client-work/upstream
       - name: Verify APK identity and signature
         run: python3 client/verify_apk.py .client-work/upstream/app/build/outputs/apk/stable/release/app-stable-release.apk
       - name: Verify adaptive downloads on Android

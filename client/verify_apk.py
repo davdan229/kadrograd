@@ -12,6 +12,12 @@ import zipfile
 HERE = Path(__file__).resolve().parent
 
 
+def certificate_digests(output):
+    return {digest.replace(":", "").lower() for digest in
+            re.findall(r"certificate SHA-256 digest:\s*([a-fA-F0-9:]+)", output)
+            if len(digest.replace(":", "")) == 64}
+
+
 def verify(apk):
     config = json.loads((HERE / "upstream.json").read_text(encoding="utf-8"))
     sdk = Path(os.environ["ANDROID_HOME"]) / "build-tools"
@@ -19,11 +25,15 @@ def verify(apk):
                       key=lambda p: [int(n) for n in re.findall(r"\d+", p.name)])
     assert versions, "Android build tools are missing"
     tools = versions[-1]
-    signed = subprocess.run([str(tools / "apksigner"), "verify", "--verbose", "--print-certs", str(apk)], capture_output=True, text=True, check=True).stdout
+    signed = subprocess.run([str(tools / "apksigner"), "verify", "--verbose", "--print-certs", str(apk)], capture_output=True, text=True, check=True, timeout=60).stdout
     expected_cert = hashlib.sha256(ssl.PEM_cert_to_DER_cert((HERE / "signing-cert.pem").read_text())).hexdigest()
-    actual_cert = re.search(r"Signer #1 certificate SHA-256 digest: ([a-fA-F0-9]+)", signed)
-    assert actual_cert and actual_cert[1].lower() == expected_cert, "APK signing certificate mismatch"
-    badging = subprocess.run([str(tools / "aapt"), "dump", "badging", str(apk)], capture_output=True, text=True, check=True).stdout
+    actual_certs = certificate_digests(signed)
+    print("Expected certificate SHA-256:", expected_cert)
+    print("Actual certificate SHA-256:", sorted(actual_certs))
+    if not actual_certs:
+        print("\n".join(line for line in signed.splitlines() if "certificate" in line.lower()))
+    assert actual_certs == {expected_cert}, "APK signing certificate mismatch"
+    badging = subprocess.run([str(tools / "aapt"), "dump", "badging", str(apk)], capture_output=True, text=True, check=True, timeout=60).stdout
     fields = dict(re.findall(r"(\w+)='([^']*)'", badging.splitlines()[0]))
     assert fields["name"] == config["applicationId"], "Unexpected APK package"
     assert fields["versionName"] == config["versionName"], "Unexpected APK version"
