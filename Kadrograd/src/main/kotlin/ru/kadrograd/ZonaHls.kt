@@ -11,8 +11,12 @@ import java.net.URI
 
 /** Public HLS master/audio playlists; no script evaluation or video transcoding. */
 internal object ZonaHls {
-    data class Video(val attributes: Map<String,String>, val url: String, val variant: ZonaTracks.Variant)
-    data class Audio(val attributes: Map<String,String>, val url: String)
+    data class Video(val attributes: Map<String,String>, val url: String, val variant: ZonaTracks.Variant) {
+        val key get() = listOf("AUDIO","RESOLUTION","CODECS","BANDWIDTH","FRAME-RATE").joinToString("|") { attributes[it].orEmpty() }
+    }
+    data class Audio(val attributes: Map<String,String>, val url: String) {
+        val key get() = listOf("GROUP-ID","NAME","LANGUAGE","CHANNELS").joinToString("|") { attributes[it].orEmpty() }
+    }
     data class Master(val lines: List<String>, val videos: List<Video>, val audio: List<Audio>)
     fun attributes(line: String): Map<String,String> =
         Regex("""([A-Z0-9-]+)=("[^"\r\n]*"|[^,\r\n]*)""").findAll(line.substringAfter(':'))
@@ -46,17 +50,17 @@ internal object ZonaHls {
             var unique = label
             var suffix = 2
             while (!group.add(unique)) unique = "$label (${suffix++})"
-            track.url to unique
+            track.key to unique
         }.toMap()
     }
 
     fun rewrite(text: String, context: ZonaTracks.Context): String {
         val master = parse(text,context.media)
         if (master.videos.isEmpty()) return text
-        val selected = master.videos.filter { it.url in context.streams && it.variant == ZonaTracks.Variant(context.width,context.height) }
+        val selected = master.videos.filter { it.key in context.streams && it.variant == ZonaTracks.Variant(context.width,context.height) }
         require(selected.isNotEmpty())
         val groups = selected.mapNotNull { it.attributes["AUDIO"] }.toSet()
-        val audio = master.audio.filter { it.url in context.voices && it.attributes["GROUP-ID"] in groups }
+        val audio = master.audio.filter { it.key in context.voices && it.attributes["GROUP-ID"] in groups }
         require(audio.isNotEmpty())
         val output = mutableListOf<String>(); var skipVideoUri = false
         val defaults = mutableSetOf<String>()
@@ -65,13 +69,15 @@ internal object ZonaHls {
             if (line.startsWith("#EXT-X-STREAM-INF:")) {
                 skipVideoUri=true
                 val value = master.lines.getOrNull(index+1) ?: continue
-                if (selected.any { it.url == absolute(context.media,value) }) { output += line; output += value }
+                val url = absolute(context.media,value)
+                if (selected.any { it.url == url && it.attributes == attributes(line) }) { output += line; output += value }
             } else if (line.startsWith("#EXT-X-MEDIA:")) {
                 val attrs = attributes(line)
                 if (attrs["TYPE"] != "AUDIO") { output += line; continue }
                 val uri = attrs["URI"]?.let { absolute(context.media,it) } ?: continue
-                if (audio.none { it.url == uri }) continue
-                val name = context.voices.getValue(uri).replace('"','\'').replace('\r',' ').replace('\n',' ')
+                val key = Audio(attrs,uri).key
+                if (audio.none { it.key == key }) continue
+                val name = context.voices.getValue(key).replace('"','\'').replace('\r',' ').replace('\n',' ')
                 val isDefault = defaults.add(attrs["GROUP-ID"].orEmpty())
                 var rendered = line.replace(Regex("""\bNAME="[^"]*"""")) { "NAME=\"$name\"" }
                     .replace(Regex("\\bDEFAULT=(YES|NO)"),"DEFAULT="+if (isDefault) "YES" else "NO")
@@ -112,16 +118,16 @@ internal object ZonaHls {
         val groups = compatible.mapNotNull { it.attributes["AUDIO"] }.distinct()
         for (group in groups) {
             val video = compatible.filter { it.attributes["AUDIO"] == group }
-            val audio = master.audio.filter { it.attributes["GROUP-ID"] == group && it.url in labels }
+            val audio = master.audio.filter { it.attributes["GROUP-ID"] == group && it.key in labels }
             if (audio.isEmpty()) continue
             val limit = Semaphore(6)
             val results = (video.map { it.url }+audio.map { it.url }).distinct().map { target ->
                 async { limit.withPermit { target to probe(target,hls) } }
             }.map { it.await() }.toMap()
             val available = video.filter { results[it.url] == true }
-            val voices = labels.filterKeys { key -> audio.any { it.url == key } && results[key] == true }
+            val voices = labels.filterKeys { key -> audio.any { it.key == key && results[it.url] == true } }
             if (available.isNotEmpty() && voices.isNotEmpty()) return@coroutineScope ZonaTracks.Found(url,
-                hls.copy(streams=available.map { it.url },voices=voices),available.map { it.variant }.distinct().sortedByDescending { it.height },subtitles)
+                hls.copy(streams=available.map { it.key },voices=voices),available.map { it.variant }.distinct().sortedByDescending { it.height },subtitles)
         }
         throw com.lagradost.cloudstream3.ErrorLoadingException("Zona: проверенные HLS-видео и озвучки недоступны")
     }

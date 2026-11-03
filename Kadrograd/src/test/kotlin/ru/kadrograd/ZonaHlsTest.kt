@@ -31,8 +31,8 @@ class ZonaHlsTest {
     @Test fun resolutionSelectionKeepsCodecDimensionsAndNamedAudioWithCorrectLanguages() {
         val parsed = ZonaHls.parse(master(),base)
         val voices = ZonaHls.labels(parsed,names).filterKeys { !it.contains("backup") }
-        val ctx = context().copy(voices=voices,streams=listOf("https://video.cdn.example/film/720.m3u8"))
-        val output = ZonaHls.rewrite(master(),ctx)
+        val ctx = context().copy(voices=voices,streams=listOf(parsed.videos.first().key))
+        val output = ZonaHls.rewrite(master().replace(".m3u8",".m3u8?signature=new"),ctx)
         val result = ZonaHls.parse(output,base)
         assertEquals(listOf(ZonaTracks.Variant(1280,720)),result.videos.map { it.variant })
         assertEquals("avc1.64001f,mp4a.40.2",result.videos.single().attributes["CODECS"])
@@ -40,10 +40,13 @@ class ZonaHlsTest {
         assertEquals(listOf("ru","ja"),result.audio.map { it.attributes["LANGUAGE"] })
         assertFalse(output.contains("backup")); assertFalse(output.contains("640x360"))
         assertEquals(1,result.audio.count { it.attributes["DEFAULT"]=="YES" })
+        assertTrue(result.videos.single().url.endsWith("?signature=new"))
+        assertTrue(result.audio.all { it.url.endsWith("?signature=new") })
     }
     @Test fun unavailableFirstVoicePromotesAvailableOriginalWithoutRelabellingItsLanguage() {
-        val ctx = context().copy(voices=mapOf("https://video.cdn.example/film/a1.m3u8" to names[1]),
-            streams=listOf("https://video.cdn.example/film/720.m3u8"))
+        val parsed = ZonaHls.parse(master(),base)
+        val ctx = context().copy(voices=mapOf(parsed.audio[1].key to names[1]),
+            streams=listOf(parsed.videos.first().key))
         val result = ZonaHls.parse(ZonaHls.rewrite(master(),ctx),base)
         assertEquals("YES",result.audio.single().attributes["DEFAULT"])
         assertEquals("ja",result.audio.single().attributes["LANGUAGE"])
