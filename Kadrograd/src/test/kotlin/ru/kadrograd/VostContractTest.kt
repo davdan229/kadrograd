@@ -68,6 +68,12 @@ class VostContractTest {
         assertEquals(TvType.AnimeMovie, result.items.single().list.single().type)
         assertFalse(result.hasNext)
     }
+    @Test fun publishedFullHdLinksKeepTheirQualityAndLowerAlternatives() = runBlocking {
+        setup("""{"file":"${provider.mainUrl}/720/101.mp4,${provider.mainUrl}/1080/101.mp4"}""")
+        val links = mutableListOf<ExtractorLink>()
+        assertTrue(provider.loadLinks(VostProvider.EpisodeRef(154,"101.mp4").toJson(),false,{},links::add))
+        assertEquals(listOf(1080,720),links.map { it.quality })
+    }
     @Test fun oldApiCardAndEpisodeReferencesUseMirrorAndFreshPlayer() = runBlocking {
         setup()
         val loaded = provider.load("https://api.animevost.org/v1/info?id=154") as AnimeLoadResponse

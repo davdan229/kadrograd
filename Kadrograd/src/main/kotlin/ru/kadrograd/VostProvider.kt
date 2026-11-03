@@ -172,8 +172,16 @@ class VostProvider(baseUrl: String) : QualityProvider() {
             } }.awaitAll().filterNotNull() }
         } ?: throw ErrorLoadingException("AnimeVost: видеосерверы не ответили за 28 секунд")
         if (found.isEmpty()) throw ErrorLoadingException("AnimeVost: доступных видеосерверов в этой сети не найдено")
-        for (url in found.sortedByDescending { URI(it).path.contains("/720/") }) {
-            val quality = if (URI(url).path.contains("/720/")) 720 else 480
+        val links = found.map { url ->
+            val path = URI(url).path
+            val quality = when {
+                path.contains("/1080/") || path.contains("/1080p/") -> 1080
+                path.contains("/720/") || path.contains("/720p/") -> 720
+                else -> 480
+            }
+            url to quality
+        }
+        for ((url, quality) in links.sortedByDescending { it.second }) {
             callback(newExtractorLink(name, "AnimeVost · ${URI(url).host} · ${quality}p · MP4", url, ExtractorLinkType.VIDEO) {
                 this.quality = quality; referer = "$mainUrl/"
             })

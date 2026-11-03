@@ -10,24 +10,26 @@ import java.net.URI
 import kotlin.io.encoding.Base64
 
 class ZonaTracksTest {
-    @Test fun wideFourKUsesUhdQualityWithoutChangingFrameDimensions() {
+    @Test fun wideVideoUsesStandardQualityWithoutChangingFrameDimensions() {
         val wide = ZonaTracks.Variant(3840,1608)
         assertEquals(2160,wide.playbackQuality)
         assertEquals("3840×1608",wide.dimensions)
         assertEquals(1440,ZonaTracks.Variant(2560,1440).playbackQuality)
         assertEquals(1080,ZonaTracks.Variant(1920,1080).playbackQuality)
+        assertEquals(1080,ZonaTracks.Variant(1920,800).playbackQuality)
+        assertEquals(720,ZonaTracks.Variant(1920,720).playbackQuality)
     }
 
     @Test fun namedVoiceChoicesPreferFullHdAndKeepVoicesAvailableOnlyInHls() {
         val primary = ZonaTracks.Found("https://video.cdn.example/main.mpd",
             context().copy(voices=mapOf("2" to "Сыендук","3" to "Оригинал")),
-            listOf(ZonaTracks.Variant(3840,2160),ZonaTracks.Variant(1920,1080)),emptyList())
+            listOf(ZonaTracks.Variant(3840,2160),ZonaTracks.Variant(1920,800)),emptyList())
         val alternate = ZonaTracks.Found("https://video.cdn.example/main.m3u8",
             context().copy(kind="zona-hls-v1",voices=mapOf("alternate" to "сыендук","other" to "Другая студия")),
             listOf(ZonaTracks.Variant(1280,720)),emptyList())
         val choices = ZonaTracks.voiceChoices(listOf(alternate,primary))
         assertEquals(listOf("Сыендук","Оригинал","Другая студия"),choices.map { it.name })
-        assertEquals(listOf(1080,1080,720),choices.map { it.variant.height })
+        assertEquals(listOf(1080,1080,720),choices.map { it.variant.playbackQuality })
         assertEquals("2",choices.first().id)
     }
     private val epoch = 1_790_000_000L

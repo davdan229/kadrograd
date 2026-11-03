@@ -34,7 +34,11 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
     data class Variant(val width: Int, val height: Int) {
         val dimensions get() = "${width}×$height"
         val isFourK get() = width >= 3840 && height >= 1440
-        val playbackQuality get() = if (isFourK) 2160 else height
+        val playbackQuality get() = when {
+            isFourK -> 2160
+            width in 1920..2048 && height in 800..<1080 -> 1080
+            else -> height
+        }
     }
     data class Found(val url: String, val context: Context, val variants: List<Variant>, val subtitles: List<Sub>,
         val voiceVariants: Map<String,List<Variant>> = emptyMap(), val av1: Boolean = false) {
@@ -76,10 +80,12 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
             sources.flatMap { found ->
                 found.context.voices.mapNotNull { (id,name) ->
                     val variant = (found.voiceVariants[id] ?: found.variants)
-                        .maxWithOrNull(compareBy<Variant> { it.height == 1080 }.thenBy { it.height })
+                        .maxWithOrNull(compareBy<Variant> { it.playbackQuality == 1080 }
+                            .thenBy { it.playbackQuality }.thenBy { it.height })
                     variant?.let { VoiceChoice(found,it,id,name) }
                 }
-            }.sortedWith(compareByDescending<VoiceChoice> { it.variant.height == 1080 }.thenByDescending { it.variant.height })
+            }.sortedWith(compareByDescending<VoiceChoice> { it.variant.playbackQuality == 1080 }
+                .thenByDescending { it.variant.playbackQuality }.thenByDescending { it.variant.height })
                 .distinctBy { it.name.trim().lowercase(java.util.Locale.ROOT) }
 
         fun context(link: ExtractorLink): Context? = tryParseJson<Context>(link.extractorData)?.takeIf { it.valid() }
