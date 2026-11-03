@@ -10,6 +10,23 @@ import java.util.concurrent.TimeUnit
 
 /** Opt-in real HTTP checks: -PliveSources --tests '*LiveSourcesCheck'. No Android UI. */
 class LiveSourcesCheck {
+    @Test fun animeVostPublicApiKeepsCatalogSearchAndDetailsWhenWebIsUnavailable() = runBlocking {
+        val api = VostProvider("http://127.0.0.1:9").apply {
+            catalogEndpoint = "https://api.animevost.org/v1/last"
+            searchEndpoint = "https://api.animevost.org/v1/search"
+            infoEndpoint = "https://api.animevost.org/v1/info"
+        }
+        val first = api.getMainPage(1, MainPageRequest("Каталог", "all", false))
+        val next = api.getMainPage(2, MainPageRequest("Каталог", "all", false))
+        assertTrue(first.items.single().list.isNotEmpty())
+        assertTrue(next.items.single().list.isNotEmpty())
+        assertNotEquals(first.items.single().list.first().url, next.items.single().list.first().url)
+        for (item in first.items.single().list.take(3)) {
+            assertTrue(api.load(item.url).name.isNotBlank())
+        }
+        val movie = api.search("Форма голоса").first { (it as? AnimeSearchResponse)?.year == 2016 }
+        assertTrue(api.load(movie.url) is MovieLoadResponse)
+    }
     @Test fun aniLibriaStrictFullHdReturnsMedia() = runBlocking {
         val api = LibriaProvider("https://anilibria.top").apply { fullHdOnly = true }
         val card = api.search("Магическая битва").first { (it as? AnimeSearchResponse)?.year == 2020 }

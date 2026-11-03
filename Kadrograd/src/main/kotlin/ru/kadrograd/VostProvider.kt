@@ -15,11 +15,13 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URI
 
-/** Uses the official web mirror, independently of api.animevost.org. */
+/** Uses the official web mirror with the public API as a fallback. */
 class VostProvider(baseUrl: String) : QualityProvider() {
     override var mainUrl = baseUrl
     override var name = "Кадроград · AnimeVost"
@@ -30,6 +32,10 @@ class VostProvider(baseUrl: String) : QualityProvider() {
     override val mainPage = animeHomePage
     private val probes = Semaphore(4)
     internal var infoEndpoint: String? = null
+    internal var searchEndpoint: String? = null
+    internal var catalogEndpoint: String? = null
+    private val catalogMutex = Mutex()
+    private var cachedCatalog: Triple<Int, Long, JsonNode>? = null
     private val episodeMapper = mapper.copy().enable(JsonParser.Feature.ALLOW_SINGLE_QUOTES)
     private val pagePaths = java.util.Collections.synchronizedMap(object : LinkedHashMap<Int,String>(64,0.75f,true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int,String>) = size > 256
@@ -70,6 +76,59 @@ class VostProvider(baseUrl: String) : QualityProvider() {
         return raw.document
     }
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        require(page > 0 && mainPage.any { it.data == request.data })
+        val web = withTimeoutOrNull(4_000) {
+            try { webMainPage(page, request) }
+            catch (_: ErrorLoadingException) { null }
+        }
+        return web ?: apiMainPage(page, request)
+    }
+
+    private suspend fun apiMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        val endpoint = catalogEndpoint ?: "https://api.animevost.org/v1/last".takeIf {
+            mainUrl in setOf("https://v14.vost.pw", "https://animevost.org")
+        } ?: throw ErrorLoadingException("AnimeVost: каталог зеркала недоступен")
+        val node = catalogMutex.withLock {
+            val cached = cachedCatalog
+            if (cached != null && cached.first == page && System.currentTimeMillis() - cached.second in 0..30_000) {
+                cached.third
+            } else {
+                val raw = SourceHttp.get("AnimeVost", "$endpoint?page=$page&quantity=20", timeoutSeconds = 6).text
+                val root = tryParseJson<JsonNode>(raw)
+                    ?: throw ErrorLoadingException("AnimeVost: изменился формат API каталога")
+                if (!root.path("data").isArray || root.path("state").path("page").asInt() != page) {
+                    throw ErrorLoadingException("AnimeVost: API вернул другую страницу каталога")
+                }
+                cachedCatalog = Triple(page, System.currentTimeMillis(), root)
+                root
+            }
+        }
+        return newHomePageResponse(request.name, apiCards(node, request.data), hasNext = page.toLong() * 20 < node.path("state").path("count").asLong())
+    }
+
+    private fun apiCards(node: JsonNode, category: String = "all"): List<SearchResponse> =
+        node.path("data").mapNotNull { row ->
+            val id = row.path("id").asInt()
+            val title = row.path("title").asText("")
+            val type = kind(row.path("type").asText(""))
+            val progress = Regex("""\[(?:\d{1,5}-)?(\d{1,5})\s+из\s+(\d{1,5})(\+)?]""").find(title)
+            val ongoing = progress != null && (progress.groupValues[3].isNotEmpty() ||
+                progress.groupValues[1].toInt() < progress.groupValues[2].toInt())
+            val included = when (category) {
+                "movies" -> type == TvType.AnimeMovie
+                "series" -> type == TvType.Anime
+                "ongoing" -> ongoing
+                else -> true
+            }
+            if (id <= 0 || title.isBlank() || !included) return@mapNotNull null
+            newAnimeSearchResponse(title, "$mainUrl/index.php?newsid=$id", type) {
+                posterUrl = row.path("urlImagePreview").asText("").takeIf(StreamTools::isHttp)
+                year = row.path("year").asText("").toIntOrNull()
+                addDubStatus(true)
+            }
+        }.distinctBy { it.url }
+
+    private suspend fun webMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val section = when (request.data) {
             "ongoing" -> "/ongoing/"
             "movies" -> "/tip/polnometrazhnyy-film/"
@@ -85,6 +144,21 @@ class VostProvider(baseUrl: String) : QualityProvider() {
     }
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.isBlank()) return emptyList()
+        val web = withTimeoutOrNull(4_000) {
+            try { webSearch(query) }
+            catch (_: ErrorLoadingException) { null }
+        }
+        if (web != null) return web
+        val endpoint = searchEndpoint ?: "https://api.animevost.org/v1/search".takeIf {
+            mainUrl in setOf("https://v14.vost.pw", "https://animevost.org")
+        } ?: throw ErrorLoadingException("AnimeVost: поиск зеркала недоступен")
+        val raw = SourceHttp.post("AnimeVost", endpoint, mapOf("name" to query.trim()), timeoutSeconds = 6).text
+        val node = tryParseJson<JsonNode>(raw)?.takeIf { it.path("data").isArray }
+            ?: throw ErrorLoadingException("AnimeVost: изменился формат API поиска")
+        return apiCards(node)
+    }
+
+    private suspend fun webSearch(query: String): List<SearchResponse> {
         return withTimeoutOrNull(16_000) {
             suspend fun page(number: Int): Document {
                 val raw = SourceHttp.post("AnimeVost", "$mainUrl/index.php?do=search", mapOf("do" to "search", "subaction" to "search",
