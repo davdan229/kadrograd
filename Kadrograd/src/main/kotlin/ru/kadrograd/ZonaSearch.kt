@@ -12,8 +12,8 @@ internal object ZonaSearch {
         val words = normalized.split(' ')
         val longest = words.maxBy { it.length }
         val prefixLength = (longest.length / 2 + 1).coerceIn(3, 6)
-        return listOf(normalized, words.dropLast(1).joinToString(" "), longest.take(prefixLength),
-            longest, longest.take((prefixLength + 1).coerceAtMost(7)), longest.takeLast(prefixLength)).distinct()
+        val additional = if (words.size == 1) listOf(longest.take(3), longest.takeLast(prefixLength)) else listOf(longest)
+        return (listOf(normalized, words.dropLast(1).joinToString(" "), longest.take(prefixLength)) + additional).distinct()
             .filter { it.length >= 3 && !it.equals(input, ignoreCase = true) }
             .take(3)
     }

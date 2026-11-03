@@ -22,8 +22,9 @@ internal object SourceHttp {
 
     /** The whole response stays cancellable when an alternate endpoint wins. */
     suspend fun <T : Any> readEndpoint(url: String, headers: Map<String,String>, timeoutSeconds: Long,
-        read: (Response) -> T): T = suspendCancellableCoroutine { continuation ->
+        head: Boolean = false, read: (Response) -> T): T = suspendCancellableCoroutine { continuation ->
         val request = Request.Builder().url(url).apply {
+            if (head) head()
             headers.forEach { (name,value) -> header(name,value) }
         }.build()
         val call = app.baseClient.newBuilder().callTimeout(timeoutSeconds,TimeUnit.SECONDS).build().newCall(request)

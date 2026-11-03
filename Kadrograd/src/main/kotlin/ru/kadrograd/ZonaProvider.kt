@@ -62,8 +62,17 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
     }
     private fun pagePath(series: Boolean, slug: String) = "/${if (series) "tvseries" else "movies"}/$slug"
     private fun validSlug(slug: String) = Regex("[a-z0-9]+(?:-[a-z0-9]+)*").matches(slug)
-    private fun detailPoster(url: String?): String? = url?.replace(
-        Regex("""^(https://img\d+\.zonapic\.com/images/)film_240/"""), "$1film_big/")
+    private suspend fun detailPoster(url: String?): String? {
+        val original = url ?: return null
+        val large = original.replace(Regex("""^(https://img\d+\.zonapic\.com/images/)film_240/"""), "$1film_big/")
+        if (large == original) return original
+        return try {
+            val bytes = SourceHttp.readEndpoint(large, headers, 2, head = true) {
+                it.header("Content-Length")?.toLongOrNull() ?: 0
+            }
+            if (bytes in 1..2_097_152) large else original
+        } catch (_: java.io.IOException) { original }
+    }
     private fun card(row: Title, series: Boolean, category: String): SearchResponse? {
         if (!validSlug(row.slug) || row.title.isBlank() || row.trailer) return null
         return posterCard(row.title, mainUrl + pagePath(series, row.slug), type(series, row.meta?.tags.orEmpty(), category),
@@ -92,7 +101,10 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         if (input.isBlank()) return emptyList()
         val results = searchOnce(input)
         val title = ZonaSearch.normalize(input)
-        if (results.isNotEmpty()) {
+        if (results.any {
+            val found = ZonaSearch.normalize(it.name)
+            found == title || found.startsWith("$title ") || title.startsWith("$found ")
+        }) {
             return results.sortedByDescending { ZonaSearch.normalize(it.name) == title }
         }
         return coroutineScope {
@@ -105,7 +117,7 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
                 }
             }.awaitAll().flatten().distinctBy { it.url }.mapNotNull { result ->
                 ZonaSearch.distance(title, ZonaSearch.normalize(result.name))?.let { it to result }
-            }.sortedBy { it.first }.map { it.second }
+            }.sortedBy { it.first }.map { it.second }.let { (it + results).distinctBy { card -> card.url } }
         }
     }
 
@@ -164,8 +176,8 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         if (title.slug != slug || title.trailer || title.kpId == null) error("карточка не содержит доступного произведения")
         return title
     }
-    private fun LoadResponse.applyDetails(title: Title) {
-        posterUrl = detailPoster(title.cover)
+    private fun LoadResponse.applyDetails(title: Title, poster: String?) {
+        posterUrl = poster
         backgroundPosterUrl = title.backdrop?.takeIf(StreamTools::isHttp)
         year = title.year
         plot = title.description
@@ -183,8 +195,9 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         val title = details(series, slug)
         val ref = mainUrl + pagePath(series, slug)
         val kind = type(series, title.meta?.tags.orEmpty())
+        val poster = detailPoster(title.cover)
         if (!series) return newMovieLoadResponse(title.title, ref, kind, PlaybackRef(ref, title.kpId!!).toJson()) {
-            applyDetails(title)
+            applyDetails(title, poster)
         }
         val seasons = title.seasons.filter { !it.banned && it.part > 0 && it.count > 0 }.sortedBy { it.part }
         if (seasons.isEmpty() || seasons.size > 100) error("доступных сезонов нет")
@@ -196,7 +209,8 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
                         val data = if (season.part == 1) title else details(true, slug, season.part)
                         data.episodes.filter { !it.banned && it.part > 0 }.map { episode ->
                             newEpisode(PlaybackRef(ref, title.kpId!!, season.part, episode.part).toJson(), {
-                                name = episode.title; this.season = season.part; this.episode = episode.part
+                                name = episode.title?.takeIf(String::isNotBlank) ?: "Серия ${episode.part}"
+                                this.season = season.part; this.episode = episode.part
                                 posterUrl = episode.cover?.takeIf(String::isNotBlank)
                             }, fix = false)
                         }
@@ -206,7 +220,7 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         } ?: error("сезоны не загрузились вовремя; попробуйте открыть карточку ещё раз")
         if (episodes.isEmpty()) error("сайт не опубликовал доступных серий")
         return newTvSeriesLoadResponse(title.title, ref, kind, episodes.distinctBy { it.season to it.episode }) {
-            applyDetails(title)
+            applyDetails(title, poster)
         }
     }
 
@@ -393,7 +407,7 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         @JsonProperty("cover_url") val cover: String? = null, @JsonProperty("role") val role: String? = null)
     data class Tag(@JsonProperty("slug") val slug: String = "", @JsonProperty("title") val title: String = "", @JsonProperty("type") val type: String = "")
     data class Season(@JsonProperty("part") val part: Int = 0, @JsonProperty("episode_count") val count: Int = 0, @JsonProperty("is_banned") val banned: Boolean = false)
-    data class Episode(@JsonProperty("part") val part: Int = 0, @JsonProperty("title") val title: String = "", @JsonProperty("cover_url") val cover: String? = null, @JsonProperty("is_banned") val banned: Boolean = false)
+    data class Episode(@JsonProperty("part") val part: Int = 0, @JsonProperty("title") val title: String? = null, @JsonProperty("cover_url") val cover: String? = null, @JsonProperty("is_banned") val banned: Boolean = false)
     data class PlaybackRef(@JsonProperty("page") val page: String, @JsonProperty("kpId") val kpId: Int,
         @JsonProperty("season") val season: Int? = null, @JsonProperty("episode") val episode: Int? = null)
     data class Sources(@JsonProperty("data") val data: List<Source> = emptyList())
