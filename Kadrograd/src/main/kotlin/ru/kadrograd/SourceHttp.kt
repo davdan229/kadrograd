@@ -6,13 +6,42 @@ import com.lagradost.nicehttp.NiceResponse
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.IOException
+import java.util.concurrent.TimeUnit
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.Request
+import okhttp3.Response
 
 internal object SourceHttp {
     // NiceHttp takes seconds, whereas coroutine withTimeout takes milliseconds.
     const val REQUEST_SECONDS = 12L
+
+    /** The whole response stays cancellable when an alternate endpoint wins. */
+    suspend fun <T : Any> readEndpoint(url: String, headers: Map<String,String>, timeoutSeconds: Long,
+        read: (Response) -> T): T = suspendCancellableCoroutine { continuation ->
+        val request = Request.Builder().url(url).apply {
+            headers.forEach { (name,value) -> header(name,value) }
+        }.build()
+        val call = app.baseClient.newBuilder().callTimeout(timeoutSeconds,TimeUnit.SECONDS).build().newCall(request)
+        continuation.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                continuation.resumeWith(Result.failure(e))
+            }
+            override fun onResponse(call: Call, response: Response) {
+                continuation.resumeWith(runCatching {
+                    response.use {
+                        if (!it.isSuccessful) throw IOException("HTTP ${it.code}")
+                        read(it)
+                    }
+                })
+            }
+        })
+    }
 
     private suspend fun request(source: String, timeoutSeconds: Long, block: suspend () -> NiceResponse): NiceResponse = try {
         val response = withTimeoutOrNull((timeoutSeconds + 1) * 1_000) { block() }

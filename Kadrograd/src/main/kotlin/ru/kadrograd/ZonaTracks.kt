@@ -165,19 +165,14 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
             error("Unclosed player data")
         }
     }
-    private suspend fun config(): String {
-        for (origin in origins()) {
-            try {
-                val raw = SourceHttp.get("Zona", "$origin/static/ext32s.txt", headers = headers, timeoutSeconds = 5).text
-                val node = json.readTree(String(Base64.decode(raw.trim()), Charsets.UTF_8))
-                val value = String(Base64.decode(node.path("ut").asText()).map { (it.toInt() xor 59).toByte() }.toByteArray(), Charsets.UTF_8)
-                require(value.startsWith("https://") && value.count { it == '{' } == 1 && value.contains("{key}"))
-                return value
-            } catch (cancelled: CancellationException) { throw cancelled }
-              catch (_: Exception) { }
-        }
-        throw ErrorLoadingException("Zona: основной плеер недоступен через эту сеть")
-    }
+    private suspend fun config(): String = firstReachable(origins()) { origin ->
+        val raw = SourceHttp.readEndpoint("$origin/static/ext32s.txt",headers,5) { it.body.string() }
+        val node = json.readTree(String(Base64.decode(raw.trim()), Charsets.UTF_8))
+        val value = String(Base64.decode(node.path("ut").asText()).map { (it.toInt() xor 59).toByte() }.toByteArray(), Charsets.UTF_8)
+        require(value.startsWith("https://") && value.count { it == '{' } == 1 && value.contains("{key}") &&
+            StreamTools.isHttp(value.replace("{key}","1")))
+        value
+    } ?: throw ErrorLoadingException("Zona: основной плеер недоступен через эту сеть")
     private suspend fun alphabet(embed: String): String {
         alphabetCache?.takeIf { System.currentTimeMillis() - it.first < 900_000 }?.let { return it.second }
         val origin = URI(embed).let { "${it.scheme}://${it.rawAuthority}" }

@@ -180,16 +180,9 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         }
         error("видеосервер не ответил или недоступен через эту сеть")
     }
-    private suspend fun clock(): Long {
-        for (origin in videoApiOrigins) {
-            try {
-                val response = SourceHttp.get("Zona", "$origin/getTime", headers = headers, timeoutSeconds = 4)
-                return response.okhttpResponse.use { serverTime(it.header("Date")) }
-            } catch (cancelled: CancellationException) { throw cancelled }
-              catch (_: Exception) { }
-        }
-        error("сервер времени недоступен через эту сеть")
-    }
+    private suspend fun clock(): Long = firstReachable(videoApiOrigins) { origin ->
+        SourceHttp.readEndpoint("$origin/getTime",headers,4) { serverTime(it.header("Date")) }
+    } ?: error("сервер времени недоступен через эту сеть")
     private suspend fun streams(source: Source, time: Long, season: Int?, episode: Int?): List<Stream> {
         return when (source.type) {
             1 -> {
