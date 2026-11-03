@@ -2,10 +2,13 @@ package com.lagradost.cloudstream3
 
 import android.media.MediaExtractor
 import android.media.MediaFormat
+import androidx.preference.PreferenceManager
 import androidx.test.platform.app.InstrumentationRegistry
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.downloader.AdaptiveDownload
+import com.lagradost.cloudstream3.utils.downloader.DownloadObjects
+import com.lagradost.cloudstream3.utils.downloader.VideoDownloadManager
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import okhttp3.Interceptor
@@ -135,6 +138,45 @@ class AdaptiveDownloadTest {
                 assertTrue(withTimeout(90_000) { AdaptiveDownload.exportToFile(context, link, output, selection(1080, 4)) })
                 assertTracks(output, 1920, 1080)
             } finally { output.delete() }
+        }
+    }
+
+    @Test fun managedDownloadCanStopAndThenPublishOneCompleteFile() = runBlocking {
+        FixtureServer().use { server ->
+            val preferences = PreferenceManager.getDefaultSharedPreferences(context)
+            val pathKey = context.getString(R.string.download_path_key)
+            val previous = preferences.getString(pathKey, null)
+            val directory = File(context.getExternalFilesDir(null), "adaptive-fixture-${System.nanoTime()}").apply { mkdirs() }
+            preferences.edit().putString(pathKey, directory.absolutePath).commit()
+            val id = 987654321
+            val provider = object : MainAPI() {
+                override var name = "Adaptive fixture"
+                override fun getVideoInterceptor(extractorLink: com.lagradost.cloudstream3.utils.ExtractorLink) = selection(1080, 4)
+            }
+            APIHolder.addPluginMapping(provider)
+            try {
+                val link = newExtractorLink(provider.name, "Studio B", "${server.origin}/dash/manifest.mpd", ExtractorLinkType.DASH) { quality = 1080 }
+                val stopped = AdaptiveDownload.download(context, link, provider.name, "Fixture", "", id) { state ->
+                    if (state.type == VideoDownloadManager.DownloadType.IsDownloading) {
+                        VideoDownloadManager.downloadEvent(id to VideoDownloadManager.DownloadActionType.Stop)
+                    }
+                }
+                assertTrue(stopped.success)
+                assertTrue(directory.listFiles().orEmpty().isEmpty())
+                val completed = withTimeout(90_000) { AdaptiveDownload.download(context, link, provider.name, "Fixture", "", id) {} }
+                assertTrue(completed.success)
+                val file = directory.listFiles().orEmpty().single { it.isFile }
+                assertTracks(file, 1920, 1080)
+                val saved = CloudStreamApp.getKey<DownloadObjects.DownloadedFileInfo>(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString())
+                assertEquals(file.name, saved?.displayName)
+                assertEquals(file.length(), saved?.totalBytes)
+                assertTrue(File(context.filesDir, "adaptive-downloads").listFiles().orEmpty().isEmpty())
+            } finally {
+                APIHolder.removePluginMapping(provider)
+                CloudStreamApp.removeKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString())
+                preferences.edit().apply { if (previous == null) remove(pathKey) else putString(pathKey, previous) }.commit()
+                directory.deleteRecursively()
+            }
         }
     }
 }

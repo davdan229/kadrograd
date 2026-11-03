@@ -110,10 +110,12 @@ object AdaptiveDownload {
             require(output.length() > 0) { "Empty downloaded file" }
             true
         } finally {
-            transformer.cancel()
-            client.dispatcher.cancelAll()
-            client.connectionPool.evictAll()
-            client.dispatcher.executorService.shutdown()
+            try { transformer.cancel() }
+            finally {
+                client.dispatcher.cancelAll()
+                client.connectionPool.evictAll()
+                client.dispatcher.executorService.shutdown()
+            }
         }
     }
 
@@ -193,10 +195,11 @@ object AdaptiveDownload {
             DownloadStatus(true, true, false)
         } finally {
             withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) {
-                if (!complete) destination?.delete()
-                output.delete()
+                try {
+                    if (!complete) destination?.delete()
+                    output.delete()
+                } finally { metadata.close() }
             }
-            metadata.close()
         }
     }
 }

@@ -16,6 +16,7 @@ HASHES = {
     BASE + "plugins/PluginManager.kt": "624f571a6cdb25fd4bc34c70e1b23ed541eb94fc34cf235d418a2e6975d6413e",
     BASE + "ui/result/EpisodeAdapter.kt": "b377967f8b5663a3949836af46773cec8f83ef52c9cfb184de042c0626143f9e",
     BASE + "ui/result/ResultFragmentPhone.kt": "f6dabd385895cb88f3201f632c413d337a4d72289b7f7d28bf87d9ffbe1967a1",
+    BASE + "ui/result/ResultViewModel2.kt": "9a44eb8865d9dca08302751d6a36b651181bb848f2507ecf85570a933e37f4d5",
 }
 
 
@@ -58,6 +59,16 @@ def apply(root):
     text = replace_once(text, "versionCode = libs.versions.versionCode.get().toInt()", f'versionCode = {CONFIG["versionCode"]}')
     text = replace_once(text, "versionName = libs.versions.versionName.get()", f'versionName = "{CONFIG["versionName"]}"')
     text = replace_once(text, "implementation(libs.bundles.media3)", 'implementation(libs.bundles.media3)\n    implementation("androidx.media3:media3-transformer:1.9.3")')
+    text = replace_once(text, "dependencies {\n    // Testing", """// The test APK shares j$ class names with the target app. Its L8 output must retain
+// the APIs used by the target as well as those referenced directly by the tests.
+tasks.withType<com.android.build.gradle.internal.tasks.L8DexDesugarLibTask>().configureEach {
+    if (name.endsWith("AndroidTest")) {
+        keepRulesConfigurations.add("-keep class j$.** { *; }")
+    }
+}
+
+dependencies {
+    // Testing""")
     changes[path] = text
 
     path = BASE + "ui/player/IGenerator.kt"
@@ -93,6 +104,31 @@ def apply(root):
     changes[path] = text
     path = BASE + "ui/result/ResultFragmentPhone.kt"
     changes[path] = replace_once(changes[path], "requirePathForActions(listOf(ACTION_DOWNLOAD_EPISODE to ep))", "requirePathForActions(listOf(ACTION_DOWNLOAD_MIRROR to ep))")
+
+    path = BASE + "ui/result/ResultViewModel2.kt"
+    text = replace_once(changes[path], "        isCasting: Boolean = false,\n        callback: (Pair<LinkLoadingResult, Int>) -> Unit",
+        "        isCasting: Boolean = false,\n        forDownload: Boolean = false,\n        callback: (Pair<LinkLoadingResult, Int>) -> Unit")
+    text = replace_once(text, """            // Could not find a better way to do this
+            //val context = CloudStreamApp.context
+            postPopup(
+                text,
+                links.links.map { txt("${it.name} ${Qualities.getStringByInt(it.quality)}") }""", """            val selected = if (forDownload) links.copy(links = com.lagradost.cloudstream3.utils.downloader.DownloadChoices.select(links.links)) else links
+            postPopup(
+                text,
+                selected.links.map { txt("${it.name} ${Qualities.getStringByInt(it.quality)}") }""")
+    text = replace_once(text, """                callback.invoke(links to (it ?: return@postPopup))
+            }
+        }
+    }
+
+    private fun acquireSingleSubtitle""", """                callback.invoke(selected to (it ?: return@postPopup))
+            }
+        }
+    }
+
+    private fun acquireSingleSubtitle""")
+    changes[path] = replace_once(text, "                    txt(R.string.episode_action_download_mirror)\n                ) { (result, index) ->",
+        "                    txt(R.string.episode_action_download_mirror),\n                    forDownload = true\n                ) { (result, index) ->")
 
     path = BASE + "plugins/PluginManager.kt"
     changes[path] = replace_once(changes[path], """    suspend fun ___DO_NOT_CALL_FROM_A_PLUGIN_loadAllOnlinePlugins(context: Context) {

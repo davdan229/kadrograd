@@ -76,15 +76,16 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
     }
     companion object {
         const val LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-        fun voiceChoices(sources: List<Found>): List<VoiceChoice> =
+        fun voiceChoices(sources: List<Found>, allQualities: Boolean = false): List<VoiceChoice> =
             sources.flatMap { found ->
-                found.context.voices.mapNotNull { (id,name) ->
-                    val variant = (found.voiceVariants[id] ?: found.variants)
-                        .maxWithOrNull(compareBy<Variant> { it.playbackQuality }.thenBy { it.height })
-                    variant?.let { VoiceChoice(found,it,id,name) }
+                found.context.voices.flatMap { (id,name) ->
+                    val variants = found.voiceVariants[id] ?: found.variants
+                    val selected = if (allQualities) variants else listOfNotNull(variants
+                        .maxWithOrNull(compareBy<Variant> { it.playbackQuality }.thenBy { it.height }))
+                    selected.map { VoiceChoice(found,it,id,name) }
                 }
             }.sortedWith(compareByDescending<VoiceChoice> { it.variant.playbackQuality }.thenByDescending { it.variant.height })
-                .distinctBy { it.name.trim().lowercase(java.util.Locale.ROOT) }
+                .distinctBy { it.name.trim().lowercase(java.util.Locale.ROOT) to if (allQualities) it.variant.playbackQuality else 0 }
 
         fun context(link: ExtractorLink): Context? = tryParseJson<Context>(link.extractorData)?.takeIf { it.valid() }
         fun interceptor(context: Context): Interceptor = Interceptor { chain ->

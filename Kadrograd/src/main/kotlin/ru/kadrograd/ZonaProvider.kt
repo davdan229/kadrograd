@@ -403,8 +403,8 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
                 })
             }
         }
-        // Keep the multi-audio links for every quality, plus one easy-to-find link per named voice.
-        val voices = ZonaTracks.voiceChoices(playback.native)
+        // The adaptive downloader needs a link locked to both resolution and voice.
+        val voices = ZonaTracks.voiceChoices(playback.native, allQualities = ClientCapabilities.adaptiveDownloads)
         if (voices.size > 1) voices.forEachIndexed { index, voice ->
             val (native,variant,id,label) = voice
             val hls = native.context.kind == "zona-hls-v1"

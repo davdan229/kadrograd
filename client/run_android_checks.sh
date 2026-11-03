@@ -34,7 +34,7 @@ adb shell input keyevent 82
 adb install -r "$checkout/app/build/outputs/apk/stable/release/app-stable-release.apk"
 adb install -r "$checkout/app/build/outputs/apk/androidTest/stable/release/app-stable-release-androidTest.apk"
 adb shell am instrument -w -r -e class com.lagradost.cloudstream3.AdaptiveDownloadTest ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/instrumentation.txt"
-grep -q 'OK (3 tests)' "$results/instrumentation.txt"
+grep -q 'OK (4 tests)' "$results/instrumentation.txt"
 ! grep -q 'FAILURES!!!' "$results/instrumentation.txt"
 adb shell am instrument -w -r -e class com.lagradost.cloudstream3.KadrogradHomeTest ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/home-instrumentation.txt"
 adb pull /sdcard/Android/data/ru.kadrograd.cloudstream/files/android-checks "$results/" || true
