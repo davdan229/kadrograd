@@ -30,12 +30,17 @@ jobs:
           java-version: '21'
       - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
       - name: Prepare pinned client source
-        run: python3 client/prepare.py .client-work/upstream
+        run: |
+          python3 client/prepare.py .client-work/upstream
+          python3 client/make_test_media.py .client-work/upstream/app/src/androidTest/assets/adaptive
       - name: Build Android client and tests
         working-directory: .client-work/upstream
         run: |
           chmod +x gradlew
           ./gradlew :app:assembleStableDebug :app:assembleStableDebugAndroidTest :app:testStableDebugUnitTest --console=plain --max-workers=2 -Dorg.gradle.jvmargs=-Xmx3g -Pkotlin.compiler.execution.strategy=in-process
+      - name: Verify adaptive downloads on Android
+        timeout-minutes: 12
+        run: bash client/run_android_checks.sh .client-work/upstream
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
@@ -43,5 +48,6 @@ jobs:
           path: |
             .client-work/upstream/app/build/outputs/apk/
             .client-work/upstream/app/build/reports/tests/
+            .client-work/upstream/android-checks/
           if-no-files-found: ignore
           retention-days: 5
