@@ -14,18 +14,31 @@ class ZonaQualityLiveCheck {
     private val api = ZonaProvider("https://w1.zona.im")
     @Test fun fullHdModeEmitsOnlyPublished1080OrHigher() = runBlocking {
         val provider = ZonaProvider(api.mainUrl).apply { fullHdOnly = true }
-        val film = provider.load("${provider.mainUrl}/movies/terminator-2-sudnyi-den") as MovieLoadResponse
+        val film = provider.load("${provider.mainUrl}/movies/interstellar") as MovieLoadResponse
         val links = mutableListOf<ExtractorLink>()
         assertTrue(provider.loadLinks(film.dataUrl,false,{},links::add))
         assertTrue(links.isNotEmpty() && links.all { it.quality >= 1080 })
         val link = links.first()
         val context = ZonaTracks.context(link)!!
         val client = app.baseClient.newBuilder().callTimeout(15,TimeUnit.SECONDS).addInterceptor(provider.getVideoInterceptor(link)!!).build()
-        client.newCall(Request.Builder().url(link.url).build()).execute().use {
+        val manifest = client.newCall(Request.Builder().url(link.url).build()).execute().use {
             assertTrue("Full HD manifest HTTP ${it.code}",it.isSuccessful)
-            assertEquals(listOf(ZonaTracks.Variant(context.width,context.height)),ZonaTracks.variants(ZonaTracks.manifest(it.body.string())))
+            ZonaTracks.manifest(it.body.string())
         }
-        println("Terminator 2: ${context.width}x${context.height}, strict 1080p")
+        assertEquals(listOf(ZonaTracks.Variant(context.width,context.height)),ZonaTracks.variants(manifest))
+        val base = manifest.getElementsByTag("BaseURL").firstOrNull()?.text()?.let { URI(context.media).resolve(it) } ?: URI(context.media)
+        val audio = manifest.getElementsByTag("AdaptationSet").first { it.attr("contentType") == "audio" }
+            .getElementsByTag("Representation").first()!!
+        val video = manifest.getElementsByTag("Representation").single { it.hasAttr("width") }
+        for (representation in listOf(audio,video)) {
+            val template = representation.getElementsByTag("SegmentTemplate").first()!!
+            val target = base.resolve(template.attr("media").replace("\$Number\$",template.attr("startNumber").ifBlank { "1" }))
+            client.newCall(Request.Builder().url(target.toString()).header("Range","bytes=0-63").build()).execute().use {
+                assertTrue("Full HD segment HTTP ${it.code}",it.isSuccessful)
+                assertEquals("1f43b675",it.body.source().readByteArray(4).joinToString("") { byte -> "%02x".format(byte.toInt() and 255) })
+            }
+        }
+        println("Interstellar: ${context.width}x${context.height}, strict 1080p; video and audio segments verified")
     }
     @Test fun hlsH264ProvidesNamedVoicesAndRealQualityForMovieAndCartoon() = runBlocking {
         for (slug in listOf("matritsa","korol-lev")) {
