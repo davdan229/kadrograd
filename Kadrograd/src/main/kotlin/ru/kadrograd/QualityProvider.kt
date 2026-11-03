@@ -11,7 +11,13 @@ abstract class QualityProvider : MainAPI() {
 
     final override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit): Boolean {
-        if (!fullHdOnly) return loadSourceLinks(data,isCasting,subtitleCallback,callback)
+        if (!fullHdOnly) {
+            val links = java.util.Collections.synchronizedList(mutableListOf<ExtractorLink>())
+            val found = loadSourceLinks(data,isCasting,subtitleCallback,links::add)
+            links.sortedWith(compareByDescending<ExtractorLink> { it.quality == 1080 }.thenByDescending { it.quality })
+                .forEach(callback)
+            return found
+        }
         val accepted = AtomicBoolean(false)
         val filtered = AtomicBoolean(false)
         val subtitles = java.util.Collections.synchronizedList(mutableListOf<SubtitleFile>())

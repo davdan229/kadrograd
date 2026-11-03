@@ -25,7 +25,9 @@ class KadrogradPlugin : Plugin() {
         val vibe = VibeProvider(saved("vibe"))
         val zona = ZonaProvider(saved("zona"))
         val providers = listOf(zona,vibe,libria,vost,rezka,filmix)
-        providers.forEach { it.fullHdOnly = prefs.getBoolean("full_hd_only",true) }
+        // Do not inherit the old 1080p-only mode when upgrading.
+        val strictQualityKey = "restrict_to_full_hd"
+        providers.forEach { it.fullHdOnly = prefs.getBoolean(strictQualityKey,false) }
         registerMainAPI(zona)
         if (prefs.getBoolean("experimental_vibe", false)) registerMainAPI(vibe)
         if (prefs.getBoolean("experimental_rezka", false)) registerMainAPI(rezka)
@@ -59,7 +61,7 @@ class KadrogradPlugin : Plugin() {
             }
             val fullHd = CheckBox(context).apply {
                 text = "Только 1080p и выше"
-                isChecked = prefs.getBoolean("full_hd_only",true)
+                isChecked = prefs.getBoolean(strictQualityKey,false)
                 content.addView(this)
             }
             val experimentalRezka = CheckBox(context).apply {
@@ -83,7 +85,7 @@ class KadrogradPlugin : Plugin() {
                     vost.mainUrl = defaults.getValue("vost_web")
                     vibe.mainUrl = defaults.getValue("vibe")
                     zona.mainUrl = defaults.getValue("zona")
-                    providers.forEach { it.fullHdOnly = true }
+                    providers.forEach { it.fullHdOnly = false }
                     Toast.makeText(context, "Адреса восстановлены. Перезапустите приложение для смены набора источников", Toast.LENGTH_LONG).show()
                 }.create()
             dialog.setOnShowListener {
@@ -94,7 +96,7 @@ class KadrogradPlugin : Plugin() {
                     } else {
                         val editor = prefs.edit()
                         editor.putBoolean("experimental_vibe", experimentalVibe.isChecked)
-                        editor.putBoolean("full_hd_only", fullHd.isChecked)
+                        editor.putBoolean(strictQualityKey, fullHd.isChecked)
                         editor.putBoolean("experimental_filmix", experimental.isChecked)
                         editor.putBoolean("experimental_rezka", experimentalRezka.isChecked)
                         values.forEach { (key, value) -> editor.putString(key, value) }

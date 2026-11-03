@@ -293,13 +293,26 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         playback.native.forEach { native ->
             val hls = native.context.kind == "zona-hls-v1"
             val format = if (hls) "HLS · H.264" else "DASH · VP9"
+            val audio = native.context.voices.values.singleOrNull() ?: "озвучек: ${native.context.voices.size}"
             for (variant in native.variants) {
-                callback(newExtractorLink(name,"Zona · ${variant.dimensions} · ${native.context.voices.size} озвучек · $format",
+                callback(newExtractorLink(name,"Zona · ${variant.dimensions} · $audio · $format",
                     native.url + "#kg-${variant.width}x${variant.height}",if (hls) ExtractorLinkType.M3U8 else ExtractorLinkType.DASH) {
                     quality = variant.height; referer = ref; headers = this@ZonaProvider.headers
                     extractorData = native.context.copy(width=variant.width,height=variant.height).toJson()
                 })
             }
+        }
+        // Keep the multi-audio links for every quality, plus one easy-to-find link per named voice.
+        val voices = ZonaTracks.voiceChoices(playback.native)
+        if (voices.size > 1) voices.forEachIndexed { index, voice ->
+            val (native,variant,id,label) = voice
+            val hls = native.context.kind == "zona-hls-v1"
+            val format = if (hls) "HLS · H.264" else "DASH · VP9"
+            callback(newExtractorLink(name,"Zona · $label · ${variant.dimensions} · $format",
+                native.url + "#kg-${variant.width}x${variant.height}-voice-$index",if (hls) ExtractorLinkType.M3U8 else ExtractorLinkType.DASH) {
+                quality = variant.height; referer = ref; headers = this@ZonaProvider.headers
+                extractorData = native.context.copy(width=variant.width,height=variant.height,voices=mapOf(id to label)).toJson()
+            })
         }
         playback.native.flatMap { it.subtitles }.distinctBy { it.url }
             .forEach { sub -> subtitleCallback(SubtitleFile(sub.name,sub.url)) }

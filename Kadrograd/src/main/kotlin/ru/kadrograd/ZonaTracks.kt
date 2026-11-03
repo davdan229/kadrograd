@@ -36,6 +36,7 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
     }
     data class Found(val url: String, val context: Context, val variants: List<Variant>, val subtitles: List<Sub>)
     data class Sub(val name: String, val url: String)
+    data class VoiceChoice(val found: Found, val variant: Variant, val id: String, val name: String)
     data class Context(@JsonProperty("kind") val kind: String = "zona-dash-v1",
         @JsonProperty("media") val media: String = "", @JsonProperty("alphabet") val alphabet: String = "",
         @JsonProperty("parameter") val parameter: String = "", @JsonProperty("epoch") val epoch: Long = 0,
@@ -61,6 +62,14 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
     }
     companion object {
         const val LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+        fun voiceChoices(sources: List<Found>): List<VoiceChoice> =
+            sources.flatMap { found ->
+                val variant = found.variants.maxWithOrNull(compareBy<Variant> { it.height == 1080 }.thenBy { it.height })
+                    ?: return@flatMap emptyList()
+                found.context.voices.map { (id,name) -> VoiceChoice(found,variant,id,name) }
+            }.sortedWith(compareByDescending<VoiceChoice> { it.variant.height == 1080 }.thenByDescending { it.variant.height })
+                .distinctBy { it.name.trim().lowercase(java.util.Locale.ROOT) }
+
         fun context(link: ExtractorLink): Context? = tryParseJson<Context>(link.extractorData)?.takeIf { it.valid() }
         fun interceptor(context: Context): Interceptor = Interceptor { chain ->
             val request = chain.request()
