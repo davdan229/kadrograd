@@ -61,6 +61,13 @@ class VostContractTest {
         assertEquals("/page/2/", requests.single().url.encodedPath)
         assertEquals("${provider.mainUrl}/poster.jpg", result.items.single().list.single().posterUrl)
     }
+    @Test fun filmRowOnlyFollowsPaginationForItsOwnCategory() = runBlocking {
+        reply = { 200 to release("полнометражный фильм") + """<a href="/ongoing/page/3/">3</a>""" }
+        val result = provider.getMainPage(2, MainPageRequest("Аниме-фильмы", "movies", false))
+        assertEquals("/tip/polnometrazhnyy-film/page/2/", requests.single().url.encodedPath)
+        assertEquals(TvType.AnimeMovie, result.items.single().list.single().type)
+        assertFalse(result.hasNext)
+    }
     @Test fun oldApiCardAndEpisodeReferencesUseMirrorAndFreshPlayer() = runBlocking {
         setup()
         val loaded = provider.load("https://api.animevost.org/v1/info?id=154") as AnimeLoadResponse

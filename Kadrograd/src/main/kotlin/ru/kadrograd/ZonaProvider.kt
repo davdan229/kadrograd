@@ -32,7 +32,7 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         "movies" to "Фильмы", "series" to "Сериалы",
         "movies/filter?genre=multfilm" to "Мультфильмы",
         "series/filter?genre=multfilm" to "Мультсериалы",
-        "movies/filter?genre=anime" to "Аниме-фильмы", "series/filter?genre=anime" to "Аниме-сериалы"
+        "series/filter?genre=anime" to "Аниме-сериалы", "movies/filter?genre=anime" to "Аниме-фильмы"
     )
     internal var videoApiOrigins = listOf("https://apiw1.mzona.net", "https://apir1.mzona.net")
     internal var streamApiOrigins = listOf("https://vsw01.zonasearch.com", "https://vsr01.zonasearch.com")
@@ -62,6 +62,8 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
     }
     private fun pagePath(series: Boolean, slug: String) = "/${if (series) "tvseries" else "movies"}/$slug"
     private fun validSlug(slug: String) = Regex("[a-z0-9]+(?:-[a-z0-9]+)*").matches(slug)
+    private fun detailPoster(url: String?): String? = url?.replace(
+        Regex("""^(https://img\d+\.zonapic\.com/images/)film_240/"""), "$1film_big/")
     private fun card(row: Title, series: Boolean, category: String): SearchResponse? {
         if (!validSlug(row.slug) || row.title.isBlank() || row.trailer) return null
         return newMovieSearchResponse(row.title, mainUrl + pagePath(series, row.slug), type(series, row.meta?.tags.orEmpty(), category)) {
@@ -161,7 +163,7 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         val ref = mainUrl + pagePath(series, slug)
         val kind = type(series, title.meta?.tags.orEmpty())
         if (!series) return newMovieLoadResponse(title.title, ref, kind, PlaybackRef(ref, title.kpId!!).toJson()) {
-            posterUrl = title.cover; year = title.year; plot = title.description; tags = title.meta?.tags?.filter { it.type == "genre" }?.map { it.title }
+            posterUrl = detailPoster(title.cover); year = title.year; plot = title.description; tags = title.meta?.tags?.filter { it.type == "genre" }?.map { it.title }
         }
         val seasons = title.seasons.filter { !it.banned && it.part > 0 && it.count > 0 }.sortedBy { it.part }
         if (seasons.isEmpty() || seasons.size > 100) error("доступных сезонов нет")
@@ -183,7 +185,7 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         } ?: error("сезоны не загрузились вовремя; попробуйте открыть карточку ещё раз")
         if (episodes.isEmpty()) error("сайт не опубликовал доступных серий")
         return newTvSeriesLoadResponse(title.title, ref, kind, episodes.distinctBy { it.season to it.episode }) {
-            posterUrl = title.cover; year = title.year; plot = title.description; tags = title.meta?.tags?.filter { it.type == "genre" }?.map { it.title }
+            posterUrl = detailPoster(title.cover); year = title.year; plot = title.description; tags = title.meta?.tags?.filter { it.type == "genre" }?.map { it.title }
         }
     }
 
@@ -301,7 +303,7 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
             true
         } ?: false
         val playback = Playback(readyDirect.sortedByDescending { StreamTools.quality(it.resolution) },
-            readyNative.sortedBy { it.context.kind })
+            readyNative.sortedWith(compareBy<ZonaTracks.Found> { it.av1 }.thenBy { it.context.kind }))
         badges.observe(ref,playback.native.flatMap { it.variants })
         if (playback.direct.isEmpty() && playback.native.isEmpty()) {
             if (!completed) error("видеосерверы не ответили вовремя")
@@ -309,7 +311,7 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         }
         playback.native.forEach { native ->
             val hls = native.context.kind == "zona-hls-v1"
-            val format = if (hls) "HLS · H.264" else "DASH · VP9"
+            val format = native.format
             for (variant in native.variants) {
                 val tracks = native.voicesFor(variant)
                 val audio = tracks.values.distinct().singleOrNull() ?: "Выбор озвучки"
@@ -325,7 +327,7 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         if (voices.size > 1) voices.forEachIndexed { index, voice ->
             val (native,variant,id,label) = voice
             val hls = native.context.kind == "zona-hls-v1"
-            val format = if (hls) "HLS · H.264" else "DASH · VP9"
+            val format = native.format
             callback(newExtractorLink(name,"Zona · $label · ${variant.dimensions} · $format",
                 native.url + "#kg-${variant.width}x${variant.height}-voice-$index",if (hls) ExtractorLinkType.M3U8 else ExtractorLinkType.DASH) {
                 quality = variant.playbackQuality; referer = ref; headers = this@ZonaProvider.headers

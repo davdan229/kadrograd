@@ -37,7 +37,12 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
         val playbackQuality get() = if (isFourK) 2160 else height
     }
     data class Found(val url: String, val context: Context, val variants: List<Variant>, val subtitles: List<Sub>,
-        val voiceVariants: Map<String,List<Variant>> = emptyMap()) {
+        val voiceVariants: Map<String,List<Variant>> = emptyMap(), val av1: Boolean = false) {
+        val format get() = when {
+            av1 -> "DASH · AV1"
+            context.kind == "zona-hls-v1" -> "HLS · H.264"
+            else -> "DASH · VP9"
+        }
         fun voicesFor(variant: Variant) = context.voices.filterKeys { id -> voiceVariants[id]?.contains(variant) ?: true }
     }
     data class Sub(val name: String, val url: String)
@@ -209,16 +214,24 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
         val base = Context(alphabet=alphabet(embed), parameter=parameter, epoch=epoch, observed=System.currentTimeMillis(), agent=ua)
         val subs = media.path("cc").mapNotNull { node -> node.path("url").asText().takeIf(StreamTools::isHttp)?.let { Sub(node.path("name").asText("Субтитры"),it) } }
         coroutineScope {
-            listOf("dash","hls").mapNotNull { format -> media.path(format).asText().takeIf(StreamTools::isHttp)?.let { format to it } }
+            listOf("dash","hls","dasha").mapNotNull { format ->
+                val url = media.path(format).asText().takeIf(StreamTools::isHttp) ?: return@mapNotNull null
+                if (format == "dasha" && !supportsAv1()) return@mapNotNull null
+                format to url
+            }
                 .forEach { (format,url) -> launch {
                     try {
                         onFound(if (format == "hls") ZonaHls.load(url,base,names,subs)
-                            else dash(url,base.copy(media=url),names,subs))
+                            else dash(url,base.copy(media=url),names,subs).copy(av1 = format == "dasha"))
                     } catch (cancelled: CancellationException) { throw cancelled }
                       catch (_: Exception) { }
                 } }
         }
     }
+    private fun supportsAv1(): Boolean = runCatching {
+        val format = android.media.MediaFormat.createVideoFormat("video/av01", 1920, 1080)
+        android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS).findDecoderForFormat(format) != null
+    }.getOrDefault(false)
     private suspend fun dash(url: String, context: Context, names: List<String>, subs: List<Sub>): Found {
         require(context.valid())
         val response = SourceHttp.get("Zona",context.transform(url),headers=headers,timeoutSeconds=6)

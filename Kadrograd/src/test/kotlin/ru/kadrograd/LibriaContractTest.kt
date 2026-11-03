@@ -49,6 +49,13 @@ class LibriaContractTest {
         assertFalse(result.hasNext)
         assertTrue(paths.single().contains("page=2"))
     }
+    @Test fun homeRowsUseTheCatalogStatusAndTypeFilters() = runBlocking {
+        body = { 200 to """{"data":[${release()}]}""" }
+        provider.getMainPage(1, MainPageRequest("Сейчас выходят", "ongoing", false))
+        provider.getMainPage(1, MainPageRequest("Аниме-фильмы", "movies", false))
+        assertTrue(paths[0].contains("publish_statuses") && paths[0].endsWith("=IS_ONGOING"))
+        assertTrue(paths[1].contains("types") && paths[1].endsWith("=MOVIE"))
+    }
 
     @Test fun searchEncodesCyrillicAndReservedCharacters() = runBlocking {
         body = { 200 to "[${release()}]" }

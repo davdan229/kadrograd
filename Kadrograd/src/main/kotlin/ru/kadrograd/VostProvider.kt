@@ -25,7 +25,9 @@ class VostProvider(baseUrl: String) : QualityProvider() {
     override val hasMainPage = true
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
-    override val mainPage = mainPageOf("all" to "Аниме — каталог AnimeVost")
+    override val mainPage = mainPageOf(
+        "ongoing" to "Сейчас выходят", "movies" to "Аниме-фильмы", "all" to "Всё аниме"
+    )
     private val probes = Semaphore(4)
     private val pagePaths = java.util.Collections.synchronizedMap(object : LinkedHashMap<Int,String>(64,0.75f,true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int,String>) = size > 256
@@ -65,11 +67,16 @@ class VostProvider(baseUrl: String) : QualityProvider() {
         return raw.document
     }
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val doc = document(if (page <= 1) "$mainUrl/" else "$mainUrl/page/$page/")
-        val cards = doc.select(".shortstory").mapNotNull(::card)
+        val section = when (request.data) {
+            "ongoing" -> "/ongoing/"
+            "movies" -> "/tip/polnometrazhnyy-film/"
+            else -> "/"
+        }
+        val doc = document(mainUrl + section + if (page <= 1) "" else "page/$page/")
+        val cards = doc.select(".shortstory").mapNotNull(::card).distinctBy { it.url }
         if (cards.isEmpty()) throw ErrorLoadingException("AnimeVost: зеркало не выдало каталог. Проверьте его адрес в настройках расширения.")
         return newHomePageResponse(request.name, cards, hasNext = doc.select("a[href]").any {
-            runCatching { URI(absolute(it.attr("href"))).path.endsWith("/page/${page + 1}/") }.getOrDefault(false)
+            runCatching { URI(absolute(it.attr("href"))).path == "${section}page/${page + 1}/" }.getOrDefault(false)
         })
     }
     override suspend fun search(query: String): List<SearchResponse> {
