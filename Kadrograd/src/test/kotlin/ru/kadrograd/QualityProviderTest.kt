@@ -19,18 +19,18 @@ class QualityProviderTest {
         }
     }
 
-    @Test fun fullHdIsFirstWithoutHidingAnyOtherQuality() = runBlocking {
+    @Test fun highestQualityIsFirstWithoutHidingFullHdOrLowerAlternatives() = runBlocking {
         val provider = Fixture(listOf(480,720,2160,1080))
         val actual = mutableListOf<Int>()
         assertTrue(provider.loadLinks("",false,{}) { actual += it.quality })
-        assertEquals(listOf(1080,2160,720,480),actual)
+        assertEquals(listOf(2160,1080,720,480),actual)
     }
 
     @Test fun strictModeRejectsUnknownAndAllHeightsBelow1080WithoutUpscaling() = runBlocking {
         val provider = Fixture(listOf(0,480,720,800,1080,2160)).apply { fullHdOnly = true }
         val accepted = mutableListOf<Int>()
         assertTrue(provider.loadLinks("",false,{}) { accepted += it.quality })
-        assertEquals(listOf(1080,2160),accepted)
+        assertEquals(listOf(2160,1080),accepted)
     }
 
     @Test fun lowerQualityRequiresExplicitOptOut() = runBlocking {

@@ -20,7 +20,7 @@ class ZonaTracksTest {
         assertEquals(720,ZonaTracks.Variant(1920,720).playbackQuality)
     }
 
-    @Test fun namedVoiceChoicesPreferFullHdAndKeepVoicesAvailableOnlyInHls() {
+    @Test fun namedVoiceChoicesPreferHighestQualityAndKeepVoicesAvailableOnlyInHls() {
         val primary = ZonaTracks.Found("https://video.cdn.example/main.mpd",
             context().copy(voices=mapOf("2" to "Сыендук","3" to "Оригинал")),
             listOf(ZonaTracks.Variant(3840,2160),ZonaTracks.Variant(1920,800)),emptyList())
@@ -29,7 +29,7 @@ class ZonaTracksTest {
             listOf(ZonaTracks.Variant(1280,720)),emptyList())
         val choices = ZonaTracks.voiceChoices(listOf(alternate,primary))
         assertEquals(listOf("Сыендук","Оригинал","Другая студия"),choices.map { it.name })
-        assertEquals(listOf(1080,1080,720),choices.map { it.variant.playbackQuality })
+        assertEquals(listOf(2160,2160,720),choices.map { it.variant.playbackQuality })
         assertEquals("2",choices.first().id)
     }
     private val epoch = 1_790_000_000L

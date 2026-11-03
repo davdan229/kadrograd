@@ -14,20 +14,20 @@ abstract class QualityProvider : MainAPI() {
         if (!fullHdOnly) {
             val links = java.util.Collections.synchronizedList(mutableListOf<ExtractorLink>())
             val found = loadSourceLinks(data,isCasting,subtitleCallback,links::add)
-            links.sortedWith(compareByDescending<ExtractorLink> { it.quality == 1080 }.thenByDescending { it.quality })
+            links.sortedByDescending { it.quality }
                 .forEach(callback)
             return found
         }
-        val accepted = AtomicBoolean(false)
+        val accepted = java.util.Collections.synchronizedList(mutableListOf<ExtractorLink>())
         val filtered = AtomicBoolean(false)
         val subtitles = java.util.Collections.synchronizedList(mutableListOf<SubtitleFile>())
         loadSourceLinks(data,isCasting,subtitles::add) { link ->
             if (link.quality >= 1080) {
-                accepted.set(true)
-                callback(link)
+                accepted.add(link)
             } else filtered.set(true)
         }
-        if (accepted.get()) {
+        if (accepted.isNotEmpty()) {
+            accepted.sortedByDescending { it.quality }.forEach(callback)
             subtitles.distinctBy { it.lang to it.url }.forEach(subtitleCallback)
             return true
         }

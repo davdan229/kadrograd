@@ -80,12 +80,10 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
             sources.flatMap { found ->
                 found.context.voices.mapNotNull { (id,name) ->
                     val variant = (found.voiceVariants[id] ?: found.variants)
-                        .maxWithOrNull(compareBy<Variant> { it.playbackQuality == 1080 }
-                            .thenBy { it.playbackQuality }.thenBy { it.height })
+                        .maxWithOrNull(compareBy<Variant> { it.playbackQuality }.thenBy { it.height })
                     variant?.let { VoiceChoice(found,it,id,name) }
                 }
-            }.sortedWith(compareByDescending<VoiceChoice> { it.variant.playbackQuality == 1080 }
-                .thenByDescending { it.variant.playbackQuality }.thenByDescending { it.variant.height })
+            }.sortedWith(compareByDescending<VoiceChoice> { it.variant.playbackQuality }.thenByDescending { it.variant.height })
                 .distinctBy { it.name.trim().lowercase(java.util.Locale.ROOT) }
 
         fun context(link: ExtractorLink): Context? = tryParseJson<Context>(link.extractorData)?.takeIf { it.valid() }
