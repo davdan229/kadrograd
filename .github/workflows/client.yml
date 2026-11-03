@@ -1,0 +1,47 @@
+name: Android client
+on:
+  push:
+    branches: [client-downloads]
+    paths: ['client/**', '.github/workflows/client.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: kadrograd-client-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: recloudstream/cloudstream
+          ref: 3796406e636356f556c16e04e1da4e37d6a19038
+          path: .client-work/upstream
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
+      - name: Prepare pinned client source
+        run: python3 client/prepare.py .client-work/upstream
+      - name: Build Android client and tests
+        working-directory: .client-work/upstream
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleStableDebug :app:assembleStableDebugAndroidTest :app:testStableDebugUnitTest --console=plain --max-workers=2 -Dorg.gradle.jvmargs=-Xmx3g -Pkotlin.compiler.execution.strategy=in-process
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: kadrograd-client-checks
+          path: |
+            .client-work/upstream/app/build/outputs/apk/
+            .client-work/upstream/app/build/reports/tests/
+          if-no-files-found: ignore
+          retention-days: 5

@@ -9,3 +9,4 @@ local.properties
 __pycache__/
 .venv/
 dist/
+.client-work/
