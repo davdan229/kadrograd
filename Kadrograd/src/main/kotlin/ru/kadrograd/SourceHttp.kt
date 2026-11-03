@@ -5,6 +5,7 @@ import com.lagradost.cloudstream3.app
 import com.lagradost.nicehttp.NiceResponse
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.IOException
@@ -32,6 +33,30 @@ internal object SourceHttp {
         require(timeoutSeconds in 1..45)
         return request(source, timeoutSeconds) { app.get(url, referer = referer, headers = headers, timeout = timeoutSeconds) }
     }
+
+    /** A transient catalogue failure can be retried once without increasing the normal wait budget. */
+    suspend fun getCatalog(source: String, url: String, referer: String? = null,
+        headers: Map<String, String> = emptyMap()): String =
+        withTimeoutOrNull((REQUEST_SECONDS + 1) * 1_000) {
+            for (attempt in 0..1) {
+                try {
+                    val response = app.get(url, referer = referer, headers = headers, timeout = if (attempt == 0) 6 else 5)
+                    val text = response.okhttpResponse.use { raw ->
+                        when {
+                            raw.isSuccessful -> withContext(Dispatchers.IO) { response.text }
+                            attempt == 0 && raw.code in setOf(502,503,504) && raw.header("Retry-After") == null -> null
+                            else -> throw ErrorLoadingException("$source: сервер вернул HTTP ${raw.code}")
+                        }
+                    }
+                    if (text != null) return@withTimeoutOrNull text
+                } catch (failure: IOException) {
+                    if (attempt == 1 || failure is javax.net.ssl.SSLException || failure is java.net.ProtocolException)
+                        throw ErrorLoadingException("$source: не удалось получить ответ каталога через эту сеть")
+                }
+                if (attempt == 0) delay(200)
+            }
+            null
+        } ?: throw ErrorLoadingException("$source: каталог не ответил вовремя через эту сеть")
 
     suspend fun post(source: String, url: String, data: Map<String, String>, timeoutSeconds: Long = REQUEST_SECONDS,
         headers: Map<String,String> = emptyMap(), referer: String? = null): NiceResponse {

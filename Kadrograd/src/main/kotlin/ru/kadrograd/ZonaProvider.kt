@@ -43,8 +43,8 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
     private fun error(message: String): Nothing = throw ErrorLoadingException("Zona: $message")
 
     private suspend inline fun <reified T> json(url: String): T =
-        tryParseJson<T>(SourceHttp.get("Zona", url, referer = "$mainUrl/",
-            headers = headers + ("Accept" to "application/json")).text) ?: error("изменился формат каталога")
+        tryParseJson<T>(SourceHttp.getCatalog("Zona", url, referer = "$mainUrl/",
+            headers = headers + ("Accept" to "application/json"))) ?: error("изменился формат каталога")
 
     private fun type(series: Boolean, tags: List<Tag> = emptyList(), category: String = ""): TvType {
         val genres = tags.map { it.slug }
@@ -73,7 +73,8 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
     }
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.isBlank()) return emptyList()
-        val doc = SourceHttp.get("Zona", "$mainUrl/search/${escaped(query.trim())}", headers = headers).document
+        val url = "$mainUrl/search/${escaped(query.trim())}"
+        val doc = org.jsoup.Jsoup.parse(SourceHttp.getCatalog("Zona", url, headers = headers),url)
         if (!doc.title().contains("Результаты поиска", true)) error("поиск недоступен или изменился")
         return doc.select("a[title][href]").mapNotNull { a ->
             val path = a.attr("href")

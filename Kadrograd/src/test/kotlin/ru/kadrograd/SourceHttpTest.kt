@@ -9,6 +9,38 @@ import org.junit.Test
 import java.util.concurrent.TimeUnit
 
 class SourceHttpTest {
+    @Test fun catalogRetriesTransientGatewayFailureOnce() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse.Builder().code(502).body("Bad gateway").build())
+            server.enqueue(MockResponse.Builder().body("catalog").build())
+            server.start()
+            assertEquals("catalog",SourceHttp.getCatalog("Проверка",server.url("/").toString()))
+            assertEquals(2,server.requestCount)
+        }
+    }
+
+    @Test fun catalogDoesNotRetryAccessDenialOrServerBackoff() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse.Builder().code(403).build())
+            server.enqueue(MockResponse.Builder().code(503).addHeader("Retry-After","30").build())
+            server.start()
+            for ((index,status) in listOf(403,503).withIndex()) {
+                try { SourceHttp.getCatalog("Проверка",server.url("/").toString()); fail("Expected HTTP $status") }
+                catch (e: ErrorLoadingException) { assertTrue(e.message.orEmpty().contains("HTTP $status")) }
+                assertEquals(index+1,server.requestCount)
+            }
+        }
+    }
+
+    @Test fun catalogRetriesWhenBodyStallsAfterSuccessfulHeaders() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse.Builder().body("late").bodyDelay(8,TimeUnit.SECONDS).build())
+            server.enqueue(MockResponse.Builder().body("complete").build())
+            server.start()
+            assertEquals("complete",SourceHttp.getCatalog("Проверка",server.url("/").toString()))
+            assertEquals(2,server.requestCount)
+        }
+    }
     @Test fun nonRespondingServerTimesOutInSecondsRatherThanHours() = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(MockResponse.Builder().headersDelay(2, TimeUnit.SECONDS).body("late").build())
