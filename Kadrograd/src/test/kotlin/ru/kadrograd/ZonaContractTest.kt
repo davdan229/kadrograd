@@ -64,6 +64,8 @@ class ZonaContractTest {
         assertEquals("Менталист", provider.search("Менталист & я").single().name)
         assertTrue(requests.single().url.encodedPath.contains("%26"))
         assertEquals("identity",requests.single().headers["Accept-Encoding"])
+        provider.badges.observe("$base/tvseries/mentalist-2008",listOf(ZonaTracks.Variant(3840,2160)))
+        assertEquals(SearchQuality.FourK,provider.search("Менталист").single().quality)
     }
     @Test fun allPublishedSeasonsUseExactSeasonAndEpisodeNumbers() = runBlocking {
         setup()

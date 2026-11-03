@@ -24,6 +24,10 @@ class KadrogradPlugin : Plugin() {
         val vost = VostProvider(saved("vost_web"))
         val vibe = VibeProvider(saved("vibe"))
         val zona = ZonaProvider(saved("zona"))
+        val badgePrefs = context.getSharedPreferences("kadrograd_verified_quality", Context.MODE_PRIVATE)
+        zona.badges = QualityBadges(badgePrefs.getStringSet("uhd",emptySet()).orEmpty()) { entries ->
+            badgePrefs.edit().putStringSet("uhd",entries).apply()
+        }
         val providers = listOf(zona,vibe,libria,vost,rezka,filmix)
         // Do not inherit the old 1080p-only mode when upgrading.
         val strictQualityKey = "restrict_to_full_hd"

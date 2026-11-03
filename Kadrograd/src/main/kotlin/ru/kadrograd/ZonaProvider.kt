@@ -37,6 +37,7 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
     internal var videoApiOrigins = listOf("https://apiw1.mzona.net", "https://apir1.mzona.net")
     internal var streamApiOrigins = listOf("https://vsw01.zonasearch.com", "https://vsr01.zonasearch.com")
     internal var sourceBudgetMillis = 30_000L
+    internal var badges = QualityBadges()
     private val ua = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
     private val headers get() = mapOf("User-Agent" to ua)
     private val nativeTracks by lazy { ZonaTracks({streamApiOrigins},ua) }
@@ -64,7 +65,7 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
     private fun card(row: Title, series: Boolean, category: String): SearchResponse? {
         if (!validSlug(row.slug) || row.title.isBlank() || row.trailer) return null
         return newMovieSearchResponse(row.title, mainUrl + pagePath(series, row.slug), type(series, row.meta?.tags.orEmpty(), category)) {
-            posterUrl = row.cover; year = row.year
+            posterUrl = row.cover; year = row.year; quality = badges.quality(mainUrl + pagePath(series,row.slug))
         }
     }
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -91,6 +92,7 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
             val year = Regex("\\((\\d{4})\\)").find(a.selectFirst("img")?.attr("alt").orEmpty())?.groupValues?.get(1)?.toIntOrNull()
             newMovieSearchResponse(title, mainUrl + path, if (path.startsWith("/tvseries/")) TvType.TvSeries else TvType.Movie) {
                 posterUrl = a.selectFirst("img")?.attr("src")?.let(::fixUrl); this.year = year
+                quality = badges.quality(mainUrl+path)
             }
         }.distinctBy { it.url }
     }
@@ -279,6 +281,7 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         } ?: false
         val playback = Playback(readyDirect.sortedByDescending { StreamTools.quality(it.resolution) },
             readyNative.sortedBy { it.context.kind })
+        badges.observe(ref,playback.native.flatMap { it.variants })
         if (playback.direct.isEmpty() && playback.native.isEmpty()) {
             if (!completed) error("видеосерверы не ответили вовремя")
             error("доступных видеоссылок для этой серии или фильма нет в текущей сети")
