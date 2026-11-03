@@ -25,8 +25,7 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
     override var name = "Кадроград · Zona"
     override var lang = "ru"
     override val hasMainPage = true
-    // Zona explicitly reserves downloading for premium accounts.
-    override val hasDownloadSupport = false
+    override val hasDownloadSupport get() = ClientCapabilities.adaptiveDownloads
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Cartoon, TvType.Anime, TvType.AnimeMovie)
     override val mainPage = mainPageOf(
         "movies" to "Фильмы", "series" to "Сериалы",

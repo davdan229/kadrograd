@@ -43,6 +43,23 @@ class VostContractTest {
             else -> release()
         } }
     }
+    @Test fun catalogApiFallbackPreservesRowsAndReusesTheSamePage() = runBlocking {
+        provider.catalogEndpoint = "${provider.mainUrl}/v1/last"
+        reply = { req ->
+            if (req.url.encodedPath == "/v1/last") 200 to """{"state":{"page":1,"count":25},"data":[
+                {"id":154,"title":"Тетрадь Смерти [1-2 из 37]","type":"ТВ","year":"2006","urlImagePreview":"https://cdn.example/a.jpg"},
+                {"id":1895,"title":"Форма голоса [1 из 1]","type":"полнометражный фильм","year":"2016"}
+            ]}""" else 503 to ""
+        }
+        val rows = provider.mainPage.map { row -> provider.getMainPage(1, MainPageRequest(row.name,row.data,false)) }
+        assertEquals(listOf(2,1,1,1), rows.map { it.items.single().list.size })
+        assertTrue(rows.all { it.hasNext })
+        assertEquals(TvType.AnimeMovie, rows[1].items.single().list.single().type)
+        assertEquals("${provider.mainUrl}/index.php?newsid=1895", rows[1].items.single().list.single().url)
+        val apiCalls = requests.filter { it.url.encodedPath == "/v1/last" }
+        assertEquals(1, apiCalls.size)
+        assertEquals("20", apiCalls.single().url.queryParameter("quantity"))
+    }
     @Test fun webSearchPostsCyrillicToMirrorWithoutCallingApi() = runBlocking {
         reply = { 200 to release() }
         val found = provider.search("Тетрадь смерти & мир").single() as AnimeSearchResponse
@@ -54,6 +71,24 @@ class VostContractTest {
         assertFalse(requests.single().headers["User-Agent"].orEmpty().contains("Mobile"))
         assertTrue(requests.single().headers["User-Agent"].orEmpty().contains("Windows NT"))
         assertEquals("/index.php", requests.single().url.encodedPath)
+    }
+    @Test fun unavailableWebSearchUsesApiAndReturnsPlayableCanonicalIds() = runBlocking {
+        provider.searchEndpoint = "${provider.mainUrl}/v1/search"
+        reply = { req -> if (req.url.encodedPath == "/v1/search") 200 to """{"data":[
+            {"id":1895,"title":"Форма голоса","type":"полнометражный фильм","year":"2016"}
+        ]}""" else 503 to "" }
+        val found = provider.search("Форма голоса").single()
+        assertEquals(TvType.AnimeMovie, found.type)
+        assertEquals("${provider.mainUrl}/index.php?newsid=1895", found.url)
+        assertTrue(requests.last().body!!.utf8().contains("name="))
+    }
+    @Test fun catalogApiCannotReturnAnotherPageAsSuccessfulPagination() = runBlocking {
+        provider.catalogEndpoint = "${provider.mainUrl}/v1/last"
+        reply = { req -> if (req.url.encodedPath == "/v1/last") 200 to """{"state":{"page":1,"count":30},"data":[]}""" else 503 to "" }
+        try {
+            provider.getMainPage(2, MainPageRequest("Каталог", "all", false))
+            fail("API returned page 1 instead of page 2")
+        } catch (expected: ErrorLoadingException) { assertTrue(expected.message.orEmpty().contains("другую страницу")) }
     }
     @Test fun catalogPaginationUsesMirrorPagesAndCorrectRelativePoster() = runBlocking {
         reply = { 200 to release() + """<a href="/page/3/">3</a>""" }
