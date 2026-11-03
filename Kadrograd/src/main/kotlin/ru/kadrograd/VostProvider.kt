@@ -1,6 +1,8 @@
 package ru.kadrograd
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import com.fasterxml.jackson.core.JsonParser
+import com.fasterxml.jackson.databind.JsonNode
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
@@ -27,6 +29,8 @@ class VostProvider(baseUrl: String) : QualityProvider() {
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
     override val mainPage = animeHomePage
     private val probes = Semaphore(4)
+    internal var infoEndpoint: String? = null
+    private val episodeMapper = mapper.copy().enable(JsonParser.Feature.ALLOW_SINGLE_QUOTES)
     private val pagePaths = java.util.Collections.synchronizedMap(object : LinkedHashMap<Int,String>(64,0.75f,true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int,String>) = size > 256
     })
@@ -40,7 +44,8 @@ class VostProvider(baseUrl: String) : QualityProvider() {
     private fun metadata(node: Element, label: String): String = node.select(".shortstoryContent p").firstOrNull {
         it.selectFirst("strong")?.text()?.startsWith(label, true) == true
     }?.let { it.text().removePrefix(it.selectFirst("strong")!!.text()).trim() }.orEmpty()
-    private fun kind(node: Element) = when (metadata(node, "Тип").lowercase()) {
+    private fun kind(node: Element) = kind(metadata(node, "Тип"))
+    private fun kind(value: String) = when (value.lowercase()) {
         "полнометражный фильм", "короткометражный фильм" -> TvType.AnimeMovie
         "ova", "ona", "тв-спэшл" -> TvType.OVA
         else -> TvType.Anime
@@ -120,21 +125,63 @@ class VostProvider(baseUrl: String) : QualityProvider() {
         val raw = doc.select("script").asSequence().mapNotNull {
             Regex("""\bvar\s+data\s*=\s*(\{[\s\S]*?})\s*;""").find(it.data())?.groupValues?.get(1)
         }.firstOrNull() ?: throw ErrorLoadingException("AnimeVost: список серий изменился или отсутствует")
-        return tryParseJson<Map<String, String?>>(raw.replace(Regex(",\\s*}"), "}"))
-            ?.mapNotNull { (label, video) -> video?.takeIf { it.matches(Regex("\\d+")) && label.isNotBlank() }?.let { label to it } }
-            ?.toMap() ?: throw ErrorLoadingException("AnimeVost: не удалось разобрать список серий")
+        return parseEpisodes(raw)
     }
+    private fun parseEpisodes(raw: String): Map<String, String> {
+        val entries = episodeMapper.readTree(raw.replace(Regex(",\\s*}"), "}"))
+        require(entries.isObject)
+        return entries.fields().asSequence().mapNotNull { (label, video) ->
+            video.asText().takeIf { it.matches(Regex("\\d+")) && label.isNotBlank() }?.let { label to it }
+        }.toMap()
+    }
+
+    private data class Release(val name: String, val kind: TvType, val poster: String?, val year: Int?,
+        val plot: String?, val tags: List<String>, val score: Score?, val duration: Int?, val episodes: Map<String, String>)
+
+    private suspend fun release(id: Int, path: String?): Release {
+        suspend fun web(): Release {
+            val doc = details(id, path)
+            val node = doc.select(".shortstory").first { it.select("[id=ratig-layer-$id]").isNotEmpty() }
+            return Release(title(node), kind(node), poster(node), metadata(node, "Год выхода").toIntOrNull(),
+                node.selectFirst("[itemprop=description]")?.text(), genres(metadata(node, "Жанр")),
+                Score.from100(node.selectFirst(".current-rating")?.text()?.toDoubleOrNull()?.takeIf { it in 0.1..100.0 }),
+                Regex("""(\d+)\s*мин""", RegexOption.IGNORE_CASE).find(metadata(node, "Количество серий"))
+                    ?.groupValues?.get(1)?.toIntOrNull()?.takeIf { it > 0 }, episodes(doc))
+        }
+        val endpoint = infoEndpoint ?: "https://api.animevost.org/v1/info".takeIf {
+            mainUrl in setOf("https://v14.vost.pw", "https://animevost.org")
+        }
+        return firstReachable(listOfNotNull("web", endpoint), alternateDelayMillis = 900) { source ->
+            (if (source == "web") web() else apiRelease(source, id))
+                .takeIf { it.name.isNotBlank() && it.episodes.isNotEmpty() }
+                ?: throw ErrorLoadingException("AnimeVost: нет данных о релизе")
+        } ?: throw ErrorLoadingException("AnimeVost: релиз не найден или недоступен на проверенных адресах")
+    }
+
+    private suspend fun apiRelease(endpoint: String, id: Int): Release {
+        val response = SourceHttp.post("AnimeVost", endpoint, mapOf("id" to id.toString()), timeoutSeconds = 6)
+        val row = tryParseJson<JsonNode>(response.text)?.path("data")?.firstOrNull { it.path("id").asInt() == id }
+            ?: throw ErrorLoadingException("AnimeVost: API не подтвердил релиз")
+        fun field(key: String) = row.path(key).asText("").takeIf(String::isNotBlank)
+        val votes = row.path("votes").asInt()
+        val average = row.path("rating").asDouble().div(votes.coerceAtLeast(1))
+        return Release(field("title").orEmpty(), kind(field("type").orEmpty()),
+            field("urlImagePreview")?.takeIf(StreamTools::isHttp), field("year")?.toIntOrNull(),
+            field("description")?.let { org.jsoup.Jsoup.parse(it).text() }, genres(field("genre").orEmpty()),
+            Score.from5(average.takeIf { votes > 0 && it in 1.0..5.0 }), null,
+            parseEpisodes(field("series").orEmpty()))
+    }
+    private fun genres(value: String) = value.split(',').map(String::trim).filter(String::isNotEmpty)
     override suspend fun load(url: String): LoadResponse = withTimeoutOrNull(15_000) { loadPage(url) }
         ?: throw ErrorLoadingException("AnimeVost: карточка не загрузилась за 15 секунд. Проверьте доступ к странице аниме через эту сеть")
 
-    private fun LoadResponse.applyDetails(node: Element) {
-        posterUrl = poster(node)
-        year = metadata(node, "Год выхода").toIntOrNull()
-        plot = node.selectFirst("[itemprop=description]")?.text()
-        tags = metadata(node, "Жанр").split(',').map(String::trim).filter(String::isNotEmpty)
-        score = Score.from100(node.selectFirst(".current-rating")?.text()?.toDoubleOrNull()?.takeIf { it in 0.1..100.0 })
-        duration = Regex("""(\d+)\s*мин""", RegexOption.IGNORE_CASE).find(metadata(node, "Количество серий"))
-            ?.groupValues?.get(1)?.toIntOrNull()?.takeIf { it > 0 }
+    private fun LoadResponse.applyDetails(release: Release) {
+        posterUrl = release.poster
+        year = release.year
+        plot = release.plot
+        tags = release.tags
+        score = release.score
+        duration = release.duration
     }
 
     private suspend fun loadPage(url: String): LoadResponse {
@@ -145,21 +192,18 @@ class VostProvider(baseUrl: String) : QualityProvider() {
             ?: uri?.path?.let { Regex("/(\\d+)-").find(it)?.groupValues?.get(1)?.toIntOrNull() }
             ?: throw ErrorLoadingException("AnimeVost: неверный номер релиза")
         if (id <= 0) throw ErrorLoadingException("AnimeVost: неверный номер релиза")
-        val doc = details(id,articlePath(url,id))
-        val node = doc.select(".shortstory").firstOrNull { it.select("[id=ratig-layer-$id]").isNotEmpty() }
-            ?: throw ErrorLoadingException("AnimeVost: карточка недоступна")
-        val list = episodes(doc)
-        if (list.isEmpty()) throw ErrorLoadingException("AnimeVost: опубликованных видео пока нет")
+        val release = release(id, articlePath(url,id))
+        val list = release.episodes
         val path = articlePath(url,id) ?: pagePaths[id]
         val canonical = mainUrl + (path ?: "/index.php?newsid=$id")
-        val type = kind(node)
+        val type = release.kind
         if (type == TvType.AnimeMovie && list.size == 1) {
-            return newMovieLoadResponse(title(node), canonical, type, EpisodeRef(id, "${list.values.single()}.mp4",path).toJson()) {
-                applyDetails(node)
+            return newMovieLoadResponse(release.name, canonical, type, EpisodeRef(id, "${list.values.single()}.mp4",path).toJson()) {
+                applyDetails(release)
             }
         }
-        return newAnimeLoadResponse(title(node), canonical, type) {
-            applyDetails(node)
+        return newAnimeLoadResponse(release.name, canonical, type) {
+            applyDetails(release)
             addEpisodes(DubStatus.Dubbed, list.map { (label, video) ->
                 newEpisode(EpisodeRef(id, "$video.mp4",path).toJson(), {
                     name = label
@@ -178,7 +222,7 @@ class VostProvider(baseUrl: String) : QualityProvider() {
         val ref = tryParseJson<EpisodeRef>(data)?.takeIf { it.releaseId > 0 } ?: return false
         val video = Regex("^(\\d+)\\.mp4$").matchEntire(ref.key)?.groupValues?.get(1) ?: return false
         val found = withTimeoutOrNull(28_000) {
-            if (video !in episodes(details(ref.releaseId,ref.page)).values)
+            if (video !in release(ref.releaseId,ref.page).episodes.values)
                 throw ErrorLoadingException("AnimeVost: выбранная серия больше не опубликована на зеркале")
             val frame = SourceHttp.get("AnimeVost", "$mainUrl/frame5.php?play=$video&_=${System.currentTimeMillis()}", "$mainUrl/", headers = browserHeaders)
             if (frame.code !in 200..299) throw ErrorLoadingException("AnimeVost: плеер зеркала вернул HTTP ${frame.code}")

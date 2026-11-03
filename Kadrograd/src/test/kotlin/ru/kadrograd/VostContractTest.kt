@@ -83,6 +83,22 @@ class VostContractTest {
         assertEquals(2, card.episodes.getValue(DubStatus.Dubbed).size)
         assertEquals("154", requests.last().url.queryParameter("newsid"))
     }
+    @Test fun previewUsesOfficialApiWhenArticlesFailAndKeepsTheEpisodePlayable() = runBlocking {
+        provider.infoEndpoint = "${provider.mainUrl}/v1/info"
+        reply = { request -> when (request.url.encodedPath) {
+            "/v1/info" -> 200 to """{"data":[{"id":999,"title":"Другая карточка"},{"id":154,"title":"Тетрадь Смерти","type":"ТВ","year":"2006","urlImagePreview":"https://cdn.example/poster.jpg","series":"{'1 серия':'101'}"}]}"""
+            "/frame5.php" -> 200 to """{"file":"${provider.mainUrl}/720/101.mp4"}"""
+            "/720/101.mp4" -> 206 to "\u0000\u0000\u0000 ftypisom"
+            else -> 503 to ""
+        } }
+        val card = provider.load("${provider.mainUrl}/tip/tv/154-death-note.html") as AnimeLoadResponse
+        assertEquals("Тетрадь Смерти", card.name)
+        assertEquals("https://cdn.example/poster.jpg", card.posterUrl)
+        val episode = card.episodes.getValue(DubStatus.Dubbed).single()
+        val links = mutableListOf<ExtractorLink>()
+        assertTrue(provider.loadLinks(episode.data, false, {}, links::add))
+        assertEquals(720, links.single().quality)
+    }
     @Test fun oldApiCardAndEpisodeReferencesUseMirrorAndFreshPlayer() = runBlocking {
         setup()
         val loaded = provider.load("https://api.animevost.org/v1/info?id=154") as AnimeLoadResponse
