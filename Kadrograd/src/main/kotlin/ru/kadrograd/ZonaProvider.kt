@@ -66,8 +66,17 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         Regex("""^(https://img\d+\.zonapic\.com/images/)film_240/"""), "$1film_big/")
     private fun card(row: Title, series: Boolean, category: String): SearchResponse? {
         if (!validSlug(row.slug) || row.title.isBlank() || row.trailer) return null
-        return newMovieSearchResponse(row.title, mainUrl + pagePath(series, row.slug), type(series, row.meta?.tags.orEmpty(), category)) {
-            posterUrl = row.cover; year = row.year; quality = badges.quality(mainUrl + pagePath(series,row.slug))
+        return posterCard(row.title, mainUrl + pagePath(series, row.slug), type(series, row.meta?.tags.orEmpty(), category),
+            row.cover, row.year)
+    }
+    private fun posterCard(title: String, url: String, kind: TvType, poster: String?, releaseYear: Int?): SearchResponse {
+        // CloudStream renders its Dub badge only for AnimeSearchResponse. Keep the real content type.
+        if (badges.dubbed(url)) return newAnimeSearchResponse(title, url, kind) {
+            posterUrl = poster; year = releaseYear; quality = badges.quality(url)
+            addDubStatus(true)
+        }
+        return newMovieSearchResponse(title, url, kind) {
+            posterUrl = poster; year = releaseYear; quality = badges.quality(url)
         }
     }
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -113,10 +122,8 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
             if (!Regex("/(movies|tvseries)/[a-z0-9]+(?:-[a-z0-9]+)*").matches(path) || a.selectFirst("img") == null) return@mapNotNull null
             val title = a.attr("title").takeIf(String::isNotBlank) ?: return@mapNotNull null
             val year = Regex("\\((\\d{4})\\)").find(a.selectFirst("img")?.attr("alt").orEmpty())?.groupValues?.get(1)?.toIntOrNull()
-            newMovieSearchResponse(title, mainUrl + path, if (path.startsWith("/tvseries/")) TvType.TvSeries else TvType.Movie) {
-                posterUrl = a.selectFirst("img")?.attr("src")?.let(::fixUrl); this.year = year
-                quality = badges.quality(mainUrl+path)
-            }
+            posterCard(title, mainUrl + path, if (path.startsWith("/tvseries/")) TvType.TvSeries else TvType.Movie,
+                a.selectFirst("img")?.attr("src")?.let(::fixUrl), year)
         }.distinctBy { it.url }
     }
     internal suspend fun suggestions(query: String): List<SearchResponse>? = withContext(Dispatchers.IO) {
@@ -304,7 +311,8 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         } ?: false
         val playback = Playback(readyDirect.sortedByDescending { StreamTools.quality(it.resolution) },
             readyNative.sortedWith(compareBy<ZonaTracks.Found> { it.av1 }.thenBy { it.context.kind }))
-        badges.observe(ref,playback.native.flatMap { it.variants })
+        badges.observe(ref,playback.native.flatMap { it.variants },
+            playback.native.flatMap { it.context.voices.values } + playback.direct.map { it.translation })
         if (playback.direct.isEmpty() && playback.native.isEmpty()) {
             if (!completed) error("видеосерверы не ответили вовремя")
             error("доступных видеоссылок для этой серии или фильма нет в текущей сети")

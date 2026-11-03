@@ -5,6 +5,17 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class QualityBadgesTest {
+    @Test fun dubRequiresAnExplicitLabelAndCanCoexistWithFourK() {
+        val url = "https://example.org/movies/film"
+        var saved = emptySet<String>()
+        val badges = QualityBadges(now = { 1_000 }, save = { saved = it })
+        badges.observe(url, emptyList(), listOf("Red Head Sound", "Недублированный"))
+        assertFalse(badges.dubbed(url))
+        badges.observe(url, listOf(ZonaTracks.Variant(3840, 1608)), listOf("HDrezka Studio (Дубл.)"))
+        val restored = QualityBadges(saved, { 1_000 })
+        assertTrue(restored.dubbed(url))
+        assertEquals(SearchQuality.FourK, restored.quality(url))
+    }
     @Test fun onlyObservedUhdIsMarkedAndCacheSurvivesRecreationUntilExpiry() {
         val movie = "https://example.org/movies/film"
         val series = "https://example.org/tvseries/series"

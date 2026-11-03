@@ -66,6 +66,11 @@ class ZonaContractTest {
         assertEquals("identity",requests.single().headers["Accept-Encoding"])
         provider.badges.observe("$base/tvseries/mentalist-2008",listOf(ZonaTracks.Variant(3840,2160)))
         assertEquals(SearchQuality.FourK,provider.search("Менталист").single().quality)
+        provider.badges.observe("$base/tvseries/mentalist-2008",emptyList(),listOf("Дубляж"))
+        val dubbed = provider.search("Менталист").single() as AnimeSearchResponse
+        assertEquals(TvType.TvSeries,dubbed.type)
+        assertEquals(SearchQuality.FourK,dubbed.quality)
+        assertTrue(dubbed.dubStatus.orEmpty().contains(DubStatus.Dubbed))
     }
     @Test fun emptySearchRetriesShorterQueriesAndOnlyReturnsCloseTitles() = runBlocking {
         reply = { request ->
