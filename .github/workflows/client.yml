@@ -1,0 +1,99 @@
+name: Android client
+on:
+  push:
+    branches: [client-downloads]
+    paths: ['client/**', '.github/workflows/client.yml']
+  workflow_dispatch:
+    inputs:
+      reuse_run:
+        description: 'Recheck an existing signed APK from this workflow run ID'
+        required: false
+        type: string
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: kadrograd-client-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: recloudstream/cloudstream
+          ref: 3796406e636356f556c16e04e1da4e37d6a19038
+          path: .client-work/upstream
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+          cache-dependency-path: client/upstream.json
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
+      - name: Prepare pinned client source
+        if: inputs.reuse_run == ''
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --no-install-recommends -y ffmpeg
+          python3 client/prepare.py .client-work/upstream
+          python3 client/make_test_media.py .client-work/upstream/app/src/androidTest/assets/adaptive
+      - name: Build and bundle extension
+        if: inputs.reuse_run == ''
+        run: |
+          chmod +x gradlew
+          ./gradlew :Kadrograd:testDebugUnitTest :Kadrograd:make makePluginsJson --console=plain --max-workers=2
+          python3 -m unittest discover -s scripts -p 'test_package_repo.py'
+          python3 scripts/package_repo.py
+          python3 client/bundle_sources.py .client-work/upstream
+          ./gradlew --stop
+      - name: Build Android client and tests
+        if: inputs.reuse_run == ''
+        working-directory: .client-work/upstream
+        env:
+          KADROGRAD_SIGNING_STORE: ${{ secrets.KADROGRAD_SIGNING_STORE }}
+          KADROGRAD_SIGNING_PASSWORD: ${{ secrets.KADROGRAD_SIGNING_PASSWORD }}
+        run: |
+          export KADROGRAD_SIGNING_STORE_PATH="$RUNNER_TEMP/kadrograd-signing.p12"
+          python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          key = os.environ['KADROGRAD_SIGNING_STORE']
+          assert key, 'APK signing key is not configured'
+          path = Path(os.environ['KADROGRAD_SIGNING_STORE_PATH'])
+          path.write_bytes(base64.b64decode(key, validate=True))
+          path.chmod(0o600)
+          PY
+          trap 'rm -f "$KADROGRAD_SIGNING_STORE_PATH"' EXIT
+          chmod +x gradlew
+          ./gradlew :app:assembleStableRelease :app:assembleStableReleaseAndroidTest :app:testStableReleaseUnitTest -PkadrogradTestBuildType=release --console=plain --max-workers=2 -Dorg.gradle.jvmargs=-Xmx3g -Pkotlin.compiler.execution.strategy=in-process
+          ./gradlew --stop
+      - name: Fetch existing signed APK for device checks
+        if: inputs.reuse_run != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.reuse_run }}
+          name: kadrograd-client-checks
+          path: .client-work/upstream
+      - name: Verify APK identity and signature
+        run: python3 client/verify_apk.py .client-work/upstream/app/build/outputs/apk/stable/release/app-stable-release.apk
+      - name: Verify adaptive downloads on Android
+        timeout-minutes: 12
+        run: bash client/run_android_checks.sh .client-work/upstream
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: kadrograd-client-checks
+          path: |
+            .client-work/upstream/app/build/outputs/apk/
+            .client-work/upstream/app/build/reports/tests/
+            .client-work/upstream/android-checks/
+          if-no-files-found: ignore
+          retention-days: 5
