@@ -44,7 +44,10 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
     private val nativeTracks by lazy { ZonaTracks({streamApiOrigins},ua) }
     override fun getVideoInterceptor(extractorLink: ExtractorLink): okhttp3.Interceptor? =
         ZonaTracks.context(extractorLink)?.let(ZonaTracks::interceptor)
-    private data class Playback(val direct: List<Stream>, val native: List<ZonaTracks.Found>)
+    private data class VerifiedStream(val stream: Stream, val uhd: ZonaTracks.Variant?) {
+        val quality get() = uhd?.playbackQuality ?: StreamTools.quality(stream.resolution).takeUnless { it >= 2160 } ?: 0
+    }
+    private data class Playback(val direct: List<VerifiedStream>, val native: List<ZonaTracks.Found>)
     private fun escaped(value: String) = URLEncoder.encode(value, "UTF-8").replace("+", "%20")
     private fun error(message: String): Nothing = throw ErrorLoadingException("Zona: $message")
 
@@ -283,7 +286,8 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
             else -> emptyList()
         }
     }
-    private suspend fun available(stream: Stream, ref: String): Boolean {
+    private suspend fun available(stream: Stream, ref: String,
+        onUhd: ((ZonaTracks.Variant) -> Unit)? = null, requireClearMedia: Boolean = false): Boolean {
         if (stream.trailer || !StreamTools.isHttp(stream.url) || Regex("/abuse_\\d+\\.mp4").containsMatchIn(stream.url)) return false
         if (!URI(stream.url).path.endsWith(".m3u8")) return SourceHttp.accessibleMp4(stream.url, ref)
         return try {
@@ -294,7 +298,23 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
                 val target = playlist.lineSequence().map(String::trim).firstOrNull { it.isNotBlank() && !it.startsWith('#') } ?: return false
                 val next = URI(url).resolve(target).toString()
                 if (!StreamTools.isHttp(next)) return false
-                if (playlist.contains("#EXT-X-STREAM-INF:")) { url = next }
+                if (playlist.contains("#EXT-X-STREAM-INF:")) {
+                    if (onUhd != null) {
+                        val variants = runCatching { ZonaHls.parse(playlist, url).videos }.getOrDefault(emptyList())
+                        val uhd = variants.filter { it.variant.isFourK }.distinctBy { it.url }.take(2)
+                            .firstOrNull { available(stream.copy(url = it.url), ref, requireClearMedia = true) }
+                        if (uhd != null) {
+                            onUhd(uhd.variant)
+                            return true
+                        }
+                        val lower = variants.firstOrNull { !it.variant.isFourK }
+                        if (lower != null) {
+                            url = lower.url
+                            return@repeat
+                        }
+                    }
+                    url = next
+                }
                 else if (playlist.contains("#EXTINF:")) {
                     return SourceHttp.get("Zona", next, referer = ref, headers = headers + ("Range" to "bytes=0-511"), timeoutSeconds = 3).okhttpResponse.use { response ->
                         withContext(Dispatchers.IO) {
@@ -303,7 +323,7 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
                             !text.startsWith('<') && !text.startsWith('{') && !text.startsWith('[') &&
                                 (prefix[0] == 0x47.toByte() || text.startsWith("ID3") ||
                                     String(prefix, 4, 4, Charsets.US_ASCII) in setOf("ftyp", "styp", "moof") ||
-                                    playlist.contains("METHOD=AES-128"))
+                                    (!requireClearMedia && playlist.contains("METHOD=AES-128")))
                         }
                     }
                 } else return false
@@ -322,7 +342,7 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         if (current.kpId != stored.kpId || (series && current.episodes.none { it.part == stored.episode && !it.banned })) error("выбранная серия больше не доступна")
         val time = clock()
         val key = if (series) "S${stored.season.toString().padStart(2, '0')}E${stored.episode.toString().padStart(2, '0')}" else ""
-        val readyDirect = java.util.concurrent.ConcurrentLinkedQueue<Stream>()
+        val readyDirect = java.util.concurrent.ConcurrentLinkedQueue<VerifiedStream>()
         val readyNative = java.util.concurrent.ConcurrentLinkedQueue<ZonaTracks.Found>()
         val completed = withTimeoutOrNull(sourceBudgetMillis) {
             coroutineScope {
@@ -353,17 +373,20 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
                         catch (_: Exception) { emptyList() }
                     candidates.take(24).forEach { stream ->
                         if (seen.add(stream.url) && remaining.getAndDecrement() > 0) launch {
-                            limit.withPermit { if (available(stream,ref)) readyDirect.add(stream) }
+                            limit.withPermit {
+                                var uhd: ZonaTracks.Variant? = null
+                                if (available(stream, ref, onUhd = { uhd = it })) readyDirect.add(VerifiedStream(stream, uhd))
+                            }
                         }
                     }
                 } }
             }
             true
         } ?: false
-        val playback = Playback(readyDirect.sortedByDescending { StreamTools.quality(it.resolution) },
+        val playback = Playback(readyDirect.sortedByDescending { it.quality },
             readyNative.sortedWith(compareBy<ZonaTracks.Found> { it.av1 }.thenBy { it.context.kind }))
-        badges.observe(ref,playback.native.flatMap { it.variants },
-            playback.native.flatMap { it.context.voices.values } + playback.direct.map { it.translation })
+        badges.observe(ref,playback.native.flatMap { it.variants } + playback.direct.mapNotNull { it.uhd },
+            playback.native.flatMap { it.context.voices.values } + playback.direct.map { it.stream.translation })
         if (playback.direct.isEmpty() && playback.native.isEmpty()) {
             if (!completed) error("видеосерверы не ответили вовремя")
             error("доступных видеоссылок для этой серии или фильма нет в текущей сети")
@@ -395,11 +418,13 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         }
         playback.native.flatMap { it.subtitles }.distinctBy { it.url }
             .forEach { sub -> subtitleCallback(SubtitleFile(sub.name,sub.url)) }
-        playback.direct.forEach { stream ->
+        playback.direct.forEach { verified ->
+            val stream = verified.stream
             val hls = URI(stream.url).path.endsWith(".m3u8")
-            callback(newExtractorLink(name, listOf("Zona", stream.translation, stream.resolution, if (hls) "HLS" else "MP4").filter(String::isNotBlank).joinToString(" · "),
+            val resolution = verified.uhd?.dimensions ?: stream.resolution.takeUnless { StreamTools.quality(it) >= 2160 }.orEmpty()
+            callback(newExtractorLink(name, listOf("Zona", stream.translation, resolution, if (hls) "HLS" else "MP4").filter(String::isNotBlank).joinToString(" · "),
                 stream.url, if (hls) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO) {
-                referer = ref; quality = StreamTools.quality(stream.resolution); headers = this@ZonaProvider.headers
+                referer = ref; quality = verified.quality; headers = this@ZonaProvider.headers
             })
             stream.subtitles.forEach { sub ->
                 val url = sub.url ?: sub.source?.url

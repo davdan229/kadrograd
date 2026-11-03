@@ -138,6 +138,27 @@ class ZonaContractTest {
         val selected = requests.first { it.url.encodedPath == "/getStreams/" }.url.queryParameter("q")!!
         assertTrue(ZonaTransport.decode(selected, 17).contains("key=7179&season=1&episode=1"))
     }
+    @Test fun directHlsChecksTheUhdVariantEvenWhenTheMasterListsHdFirst() = runBlocking {
+        setup(streamBody = """[{"url":"$base/master.m3u8","resolution":"HD","translation":"Дубляж"}]""")
+        val previous = reply
+        var uhdStatus = 206
+        reply = { req -> when (req.url.encodedPath) {
+            "/master.m3u8" -> 200 to "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1,RESOLUTION=1280x720\nhd.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=2,RESOLUTION=3840x2160\nuhd.m3u8\n"
+            "/hd.m3u8" -> 200 to "#EXTM3U\n#EXTINF:10,\nhd.ts\n"
+            "/uhd.m3u8" -> 200 to "#EXTM3U\n#EXTINF:10,\nuhd.ts\n"
+            "/hd.ts" -> 206 to "G".repeat(64)
+            "/uhd.ts" -> uhdStatus to "G".repeat(64)
+            else -> previous(req)
+        } }
+        val links = mutableListOf<ExtractorLink>()
+        assertTrue(provider.loadLinks(stored(), true, {}, links::add))
+        assertEquals(2160, links.single().quality)
+        assertEquals(SearchQuality.FourK, provider.badges.quality("$base/tvseries/mentalist-2008"))
+        uhdStatus = 403
+        links.clear()
+        assertTrue(provider.loadLinks(stored(), true, {}, links::add))
+        assertTrue(links.single().quality < 2160)
+    }
     @Test fun blockedCdnProducesAnErrorBeforePlayer() = runBlocking {
         setup(403); val links = mutableListOf<ExtractorLink>()
         try { provider.loadLinks(stored(), false, {}, links::add); fail("Blocked media") }
