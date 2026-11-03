@@ -291,7 +291,7 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
             val format = if (hls) "HLS · H.264" else "DASH · VP9"
             for (variant in native.variants) {
                 val tracks = native.voicesFor(variant)
-                val audio = tracks.values.distinct().singleOrNull() ?: "озвучек: ${tracks.values.distinct().size}"
+                val audio = tracks.values.distinct().singleOrNull() ?: "Выбор озвучки"
                 callback(newExtractorLink(name,"Zona · ${variant.dimensions} · $audio · $format",
                     native.url + "#kg-${variant.width}x${variant.height}",if (hls) ExtractorLinkType.M3U8 else ExtractorLinkType.DASH) {
                     quality = variant.playbackQuality; referer = ref; headers = this@ZonaProvider.headers

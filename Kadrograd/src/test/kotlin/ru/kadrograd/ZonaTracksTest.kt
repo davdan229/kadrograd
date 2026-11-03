@@ -69,7 +69,7 @@ class ZonaTracksTest {
         val tracks = document.getElementsByTag("AdaptationSet").filter { it.attr("contentType") == "audio" }
         assertEquals(2,tracks.size)
         assertEquals(listOf("Рус. Дублированный","Eng.Original"),tracks.map { it.getElementsByTag("Label").single().text() })
-        assertEquals(listOf("ru","en"),tracks.map { it.attr("lang") })
+        assertTrue(tracks.none { it.hasAttr("lang") })
         assertEquals(listOf("10","11"),tracks.map { it.attr("id") })
     }
 

@@ -61,6 +61,7 @@ internal object ZonaHls {
         val candidates = master.videos.filter { it.key in context.streams && it.variant == ZonaTracks.Variant(context.width,context.height) }
         val groups = candidates.mapNotNull { it.attributes["AUDIO"] }.toSet()
         val audio = master.audio.filter { it.key in context.voices && it.attributes["GROUP-ID"] in groups }
+        val audioCountByGroup = audio.groupingBy { it.attributes["GROUP-ID"] }.eachCount()
         val activeGroups = audio.mapNotNull { it.attributes["GROUP-ID"] }.toSet()
         val selected = candidates.filter { it.attributes["AUDIO"] in activeGroups }
         require(selected.isNotEmpty())
@@ -83,6 +84,10 @@ internal object ZonaHls {
                 val isDefault = defaults.add(attrs["GROUP-ID"].orEmpty())
                 var rendered = line.replace(Regex("""\bNAME="[^"]*"""")) { "NAME=\"$name\"" }
                     .replace(Regex("\\bDEFAULT=(YES|NO)"),"DEFAULT="+if (isDefault) "YES" else "NO")
+                // CloudStream falls back to NAME only when LANGUAGE is absent.
+                if (audioCountByGroup.getValue(attrs["GROUP-ID"]) > 1) {
+                    rendered = rendered.replace(Regex(""",LANGUAGE="[^"]*""""),"")
+                }
                 if (isDefault) rendered = rendered.replace("AUTOSELECT=NO","AUTOSELECT=YES")
                 output += rendered
             } else output += line

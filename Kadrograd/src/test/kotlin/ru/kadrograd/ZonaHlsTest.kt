@@ -28,7 +28,7 @@ class ZonaHlsTest {
         ${prefix}backup-720.m3u8
     """.trimIndent()
 
-    @Test fun resolutionSelectionKeepsCodecDimensionsAndNamedAudioWithCorrectLanguages() {
+    @Test fun resolutionSelectionKeepsCodecDimensionsAndMakesStudioLabelsVisible() {
         val parsed = ZonaHls.parse(master(),base)
         val voices = ZonaHls.labels(parsed,names).filterKeys { !it.contains("backup") }
         val ctx = context().copy(voices=voices,streams=listOf(parsed.videos.first().key))
@@ -37,7 +37,7 @@ class ZonaHlsTest {
         assertEquals(listOf(ZonaTracks.Variant(1280,720)),result.videos.map { it.variant })
         assertEquals("avc1.64001f,mp4a.40.2",result.videos.single().attributes["CODECS"])
         assertEquals(names,result.audio.map { it.attributes["NAME"] })
-        assertEquals(listOf("ru","ja"),result.audio.map { it.attributes["LANGUAGE"] })
+        assertTrue(result.audio.none { "LANGUAGE" in it.attributes })
         assertFalse(output.contains("backup")); assertFalse(output.contains("640x360"))
         assertEquals(1,result.audio.count { it.attributes["DEFAULT"]=="YES" })
         assertTrue(result.videos.single().url.endsWith("?signature=new"))

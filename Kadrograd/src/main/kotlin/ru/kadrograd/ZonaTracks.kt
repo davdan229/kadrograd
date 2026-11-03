@@ -122,6 +122,8 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
 
         fun rewriteManifest(text: String, context: Context): String {
             val doc = manifest(text)
+            // CloudStream displays the language instead of the label when both are present.
+            val showStudioNames = context.voices.values.distinct().size > 1
             if (context.width > 0 && context.height > 0) {
                 val all = doc.getElementsByTag("Representation").filter { it.hasAttr("width") }
                 require(all.any { it.attr("width") == context.width.toString() && it.attr("height") == context.height.toString() })
@@ -145,7 +147,7 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
                                 originalLanguage.takeUnless { it.matches(Regex("ru\\d+")) }?.replace(Regex("\\d+$"),"").orEmpty()
                             else -> originalLanguage.replace(Regex("\\d+$"),"").ifBlank { "ru" }
                         }
-                        if (language.isBlank()) track.removeAttr("lang") else track.attr("lang",language)
+                        if (showStudioNames || language.isBlank()) track.removeAttr("lang") else track.attr("lang",language)
                     }
                 }
             }
