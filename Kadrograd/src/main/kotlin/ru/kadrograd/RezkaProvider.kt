@@ -41,7 +41,7 @@ import kotlin.coroutines.coroutineContext
  * Uses [Session] (CookieJar) — global [app] is a bare Requests with NO cookie jar,
  * so Anubis auth cookies would otherwise be discarded after pass-challenge.
  */
-class RezkaProvider(baseUrl: String) : MainAPI() {
+class RezkaProvider(baseUrl: String) : QualityProvider() {
     override var mainUrl = baseUrl
     override var name = "Кадроград · HDRezka"
     override val hasMainPage = true
@@ -639,7 +639,7 @@ class RezkaProvider(baseUrl: String) : MainAPI() {
         }
     }
 
-    override suspend fun loadLinks(
+    override suspend fun loadSourceLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,

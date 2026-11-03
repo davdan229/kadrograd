@@ -12,6 +12,55 @@ import java.util.concurrent.TimeUnit
 
 class ZonaQualityLiveCheck {
     private val api = ZonaProvider("https://w1.zona.im")
+    @Test fun fullHdModeEmitsOnlyPublished1080OrHigher() = runBlocking {
+        val provider = ZonaProvider(api.mainUrl).apply { fullHdOnly = true }
+        val film = provider.load("${provider.mainUrl}/movies/terminator-2-sudnyi-den") as MovieLoadResponse
+        val links = mutableListOf<ExtractorLink>()
+        assertTrue(provider.loadLinks(film.dataUrl,false,{},links::add))
+        assertTrue(links.isNotEmpty() && links.all { it.quality >= 1080 })
+        val link = links.first()
+        val context = ZonaTracks.context(link)!!
+        val client = app.baseClient.newBuilder().callTimeout(15,TimeUnit.SECONDS).addInterceptor(provider.getVideoInterceptor(link)!!).build()
+        client.newCall(Request.Builder().url(link.url).build()).execute().use {
+            assertTrue("Full HD manifest HTTP ${it.code}",it.isSuccessful)
+            assertEquals(listOf(ZonaTracks.Variant(context.width,context.height)),ZonaTracks.variants(ZonaTracks.manifest(it.body.string())))
+        }
+        println("Terminator 2: ${context.width}x${context.height}, strict 1080p")
+    }
+    @Test fun hlsH264ProvidesNamedVoicesAndRealQualityForMovieAndCartoon() = runBlocking {
+        for (slug in listOf("matritsa","korol-lev")) {
+            val movie = api.load("${api.mainUrl}/movies/$slug") as MovieLoadResponse
+            val links = mutableListOf<ExtractorLink>()
+            api.loadLinks(movie.dataUrl,false,{},links::add)
+            val hls = links.filter { ZonaTracks.context(it)?.kind == "zona-hls-v1" }
+            assertTrue("$slug must have native HLS qualities",hls.size >= 2)
+            if (slug == "korol-lev") assertTrue(hls.any { it.quality == 720 })
+            for (link in hls) {
+                val context = ZonaTracks.context(link)!!
+                assertTrue(context.voices.size > 1)
+                val client = app.baseClient.newBuilder().callTimeout(12,TimeUnit.SECONDS).addInterceptor(api.getVideoInterceptor(link)!!).build()
+                fun get(url: String): String = client.newCall(Request.Builder().url(url).build()).execute().use {
+                    assertTrue("HLS playlist HTTP ${it.code}",it.isSuccessful);it.body.string()
+                }
+                val master = ZonaHls.parse(get(link.url),context.media)
+                assertEquals(listOf(ZonaTracks.Variant(context.width,context.height)),master.videos.map { it.variant }.distinct())
+                assertEquals(context.voices.values.toSet(),master.audio.map { it.attributes["NAME"] }.toSet())
+                assertTrue(master.videos.all { it.attributes["CODECS"].orEmpty().contains("avc1") })
+                for (url in listOf(master.videos.first().url,master.audio.first().url,master.audio.last().url)) {
+                    val segments = get(url).lineSequence().map(String::trim).filter { it.isNotBlank() && !it.startsWith('#') }.toList()
+                    assertTrue(segments.isNotEmpty())
+                    for (part in listOf(segments.first(),segments[segments.size/2]).distinct()) {
+                        val mediaUrl = URI(url).resolve(part).toString()
+                        client.newCall(Request.Builder().url(mediaUrl).header("Range","bytes=0-63").build()).execute().use {
+                            assertTrue("HLS media HTTP ${it.code}",it.isSuccessful)
+                            assertEquals(0x47,it.body.source().readByte().toInt() and 255)
+                        }
+                    }
+                }
+                println("$slug HLS: ${context.width}x${context.height}, ${context.voices.size} named voices, H.264, first/middle audio/video segments verified")
+            }
+        }
+    }
     @Test fun matrixAndMentalistHaveNamedAudioAndRealVideoVariants() = runBlocking {
         val matrix = api.load("${api.mainUrl}/movies/matritsa") as MovieLoadResponse
         val mentalist = api.load("${api.mainUrl}/tvseries/mentalist-2008") as TvSeriesLoadResponse

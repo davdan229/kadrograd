@@ -45,7 +45,12 @@ class ZonaLiveCheck {
         } else if (URI(link.url).path.endsWith(".m3u8")) {
             var url = link.url
             repeat(3) {
-                val text = String(get(url).second)
+                val text = client.newCall(Request.Builder().url(url).header("Referer",link.referer).apply {
+                    link.headers.forEach { (key,value) -> header(key,value) }
+                }.build()).execute().use {
+                    assertTrue("HLS playlist HTTP ${it.code}",it.isSuccessful)
+                    it.body.string()
+                }
                 assertTrue(text.startsWith("#EXTM3U"))
                 val next = text.lineSequence().map(String::trim).first { it.isNotBlank() && !it.startsWith('#') }
                 url = URI(url).resolve(next).toString()

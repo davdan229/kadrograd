@@ -24,6 +24,8 @@ class KadrogradPlugin : Plugin() {
         val vost = VostProvider(saved("vost_web"))
         val vibe = VibeProvider(saved("vibe"))
         val zona = ZonaProvider(saved("zona"))
+        val providers = listOf(zona,vibe,libria,vost,rezka,filmix)
+        providers.forEach { it.fullHdOnly = prefs.getBoolean("full_hd_only",true) }
         registerMainAPI(zona)
         if (prefs.getBoolean("experimental_vibe", false)) registerMainAPI(vibe)
         if (prefs.getBoolean("experimental_rezka", false)) registerMainAPI(rezka)
@@ -55,6 +57,11 @@ class KadrogradPlugin : Plugin() {
                 isChecked = prefs.getBoolean("experimental_vibe", false)
                 content.addView(this)
             }
+            val fullHd = CheckBox(context).apply {
+                text = "Только 1080p и выше"
+                isChecked = prefs.getBoolean("full_hd_only",true)
+                content.addView(this)
+            }
             val experimentalRezka = CheckBox(context).apply {
                 text = "HDRezka: нестабильный источник (потребуется перезапуск приложения)"
                 isChecked = prefs.getBoolean("experimental_rezka", false)
@@ -76,6 +83,7 @@ class KadrogradPlugin : Plugin() {
                     vost.mainUrl = defaults.getValue("vost_web")
                     vibe.mainUrl = defaults.getValue("vibe")
                     zona.mainUrl = defaults.getValue("zona")
+                    providers.forEach { it.fullHdOnly = true }
                     Toast.makeText(context, "Адреса восстановлены. Перезапустите приложение для смены набора источников", Toast.LENGTH_LONG).show()
                 }.create()
             dialog.setOnShowListener {
@@ -86,6 +94,7 @@ class KadrogradPlugin : Plugin() {
                     } else {
                         val editor = prefs.edit()
                         editor.putBoolean("experimental_vibe", experimentalVibe.isChecked)
+                        editor.putBoolean("full_hd_only", fullHd.isChecked)
                         editor.putBoolean("experimental_filmix", experimental.isChecked)
                         editor.putBoolean("experimental_rezka", experimentalRezka.isChecked)
                         values.forEach { (key, value) -> editor.putString(key, value) }
@@ -96,6 +105,7 @@ class KadrogradPlugin : Plugin() {
                         vost.mainUrl = values.getValue("vost_web")!!
                         vibe.mainUrl = values.getValue("vibe")!!
                         zona.mainUrl = values.getValue("zona")!!
+                        providers.forEach { it.fullHdOnly = fullHd.isChecked }
                         dialog.dismiss()
                     }
                 }

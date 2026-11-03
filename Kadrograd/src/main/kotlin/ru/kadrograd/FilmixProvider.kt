@@ -41,7 +41,7 @@ import org.jsoup.nodes.Element
  * [resoul/filmix](https://github.com/resoul/filmix) (MIT/demo educational client).
  * Does NOT use Lampa / online_mod code.
  */
-class FilmixProvider(baseUrl: String) : MainAPI() {
+class FilmixProvider(baseUrl: String) : QualityProvider() {
     override var mainUrl = baseUrl
     private val voiceSlots = Semaphore(3)
     private val http by lazy { Session(app.baseClient).apply { defaultTimeOut = 12L; defaultHeaders = app.defaultHeaders; responseParser = app.responseParser } }
@@ -204,7 +204,7 @@ class FilmixProvider(baseUrl: String) : MainAPI() {
         }
     }
 
-    override suspend fun loadLinks(
+    override suspend fun loadSourceLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,

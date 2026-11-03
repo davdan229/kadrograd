@@ -14,7 +14,7 @@ import org.jsoup.nodes.Element
 import java.net.URI
 
 /** Guest playback only. The site reserves HD and downloads for registered viewers. */
-class VibeProvider(baseUrl: String) : MainAPI() {
+class VibeProvider(baseUrl: String) : QualityProvider() {
     override var mainUrl = baseUrl
     override var name = "Кадроград · KinoVibe"
     override var lang = "ru"
@@ -114,7 +114,7 @@ class VibeProvider(baseUrl: String) : MainAPI() {
             }, fix = false)
         }) { this.posterUrl = poster; this.year = year; this.plot = plot }
     }
-    override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit,
+    override suspend fun loadSourceLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit): Boolean {
         val stored = tryParseJson<PlaybackRef>(data) ?: return false
         val ref = pageUrl(stored.page)

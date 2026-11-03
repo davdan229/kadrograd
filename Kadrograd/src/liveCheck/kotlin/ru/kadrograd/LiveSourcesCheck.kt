@@ -10,6 +10,26 @@ import java.util.concurrent.TimeUnit
 
 /** Opt-in real HTTP checks: -PliveSources --tests '*LiveSourcesCheck'. No Android UI. */
 class LiveSourcesCheck {
+    @Test fun aniLibriaStrictFullHdReturnsMedia() = runBlocking {
+        val api = LibriaProvider("https://anilibria.top").apply { fullHdOnly = true }
+        val card = api.search("Магическая битва").first { (it as? AnimeSearchResponse)?.year == 2020 }
+        val release = api.load(card.url) as AnimeLoadResponse
+        val streams = links(api,release.episodes.getValue(DubStatus.Dubbed).first().data)
+        assertTrue(streams.all { it.quality == 1080 })
+        var url = streams.first().url
+        repeat(3) {
+            val manifest = SourceHttp.get("AniLibria",url,referer=api.mainUrl).text
+            assertTrue(manifest.trimStart().startsWith("#EXTM3U"))
+            val part = manifest.lineSequence().map(String::trim).first { it.isNotEmpty() && !it.startsWith('#') }
+            url = java.net.URI(url).resolve(part).toString()
+            if (manifest.contains("#EXTINF:")) {
+                SourceHttp.get("AniLibria",url,referer=api.mainUrl,headers=mapOf("Range" to "bytes=0-4095"))
+                    .okhttpResponse.use { response -> assertTrue(response.body.source().readByteArray(16).isNotEmpty()) }
+                return@runBlocking
+            }
+        }
+        fail("Expected an HLS media playlist")
+    }
     private fun sample(link: ExtractorLink) {
         val client = app.baseClient.newBuilder().callTimeout(20, TimeUnit.SECONDS).build()
         for (start in listOf(0, 1_048_576)) {

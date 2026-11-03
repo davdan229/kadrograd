@@ -9,7 +9,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.net.URLEncoder
 
-class LibriaProvider(baseUrl: String) : MainAPI() {
+class LibriaProvider(baseUrl: String) : QualityProvider() {
     override var mainUrl = baseUrl
     override var name = "Кадроград · AniLibria"
     override var lang = "ru"
@@ -89,7 +89,7 @@ class LibriaProvider(baseUrl: String) : MainAPI() {
         }
     }
 
-    override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit,
+    override suspend fun loadSourceLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit): Boolean {
         val ref = tryParseJson<EpisodeRef>(data) ?: return false
         // Resolve at playback time: signed CDN URLs must not be saved in watch history.

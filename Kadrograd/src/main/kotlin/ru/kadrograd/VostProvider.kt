@@ -18,7 +18,7 @@ import org.jsoup.nodes.Element
 import java.net.URI
 
 /** Uses the official web mirror, independently of api.animevost.org. */
-class VostProvider(baseUrl: String) : MainAPI() {
+class VostProvider(baseUrl: String) : QualityProvider() {
     override var mainUrl = baseUrl
     override var name = "Кадроград · AnimeVost"
     override var lang = "ru"
@@ -151,7 +151,7 @@ class VostProvider(baseUrl: String) : MainAPI() {
         .filter { StreamTools.isHttp(it) && URI(it).path.substringAfterLast('/') == "$video.mp4" }
         .distinctBy { URI(it).let { u -> "${u.host}|${u.path}" } }.take(8).toList()
 
-    override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit,
+    override suspend fun loadSourceLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit): Boolean {
         val ref = tryParseJson<EpisodeRef>(data)?.takeIf { it.releaseId > 0 } ?: return false
         val video = Regex("^(\\d+)\\.mp4$").matchEntire(ref.key)?.groupValues?.get(1) ?: return false

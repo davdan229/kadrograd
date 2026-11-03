@@ -11,6 +11,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
@@ -39,10 +40,11 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
         @JsonProperty("parameter") val parameter: String = "", @JsonProperty("epoch") val epoch: Long = 0,
         @JsonProperty("observed") val observed: Long = 0, @JsonProperty("voices") val voices: Map<String, String> = emptyMap(),
         @JsonProperty("width") val width: Int = 0, @JsonProperty("height") val height: Int = 0,
-        @JsonProperty("agent") val agent: String = "Mozilla/5.0") {
-        fun valid() = kind == "zona-dash-v1" && StreamTools.isHttp(media) && alphabet.length == 52 &&
+        @JsonProperty("agent") val agent: String = "Mozilla/5.0",
+        @JsonProperty("streams") val streams: List<String> = emptyList()) {
+        fun valid() = kind in setOf("zona-dash-v1","zona-hls-v1") && StreamTools.isHttp(media) && alphabet.length == 52 &&
             alphabet.toSet() == LETTERS.toSet() && Regex("[A-Za-z0-9_=.-]{1,120}").matches(parameter) && epoch > 0 &&
-            agent.length in 1..512 && !agent.contains('\r') && !agent.contains('\n')
+            agent.length in 1..512 && !agent.contains('\r') && !agent.contains('\n') && streams.size <= 100 && voices.size <= 200
 
         fun transform(value: String, now: Long = System.currentTimeMillis()): String {
             if (!valid()) throw IllegalArgumentException("Invalid Zona playback context")
@@ -64,11 +66,15 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
             val original = request.url.toString()
             val rewritten = context.transform(original)
             val response = chain.proceed(request.newBuilder().url(rewritten).apply { if (rewritten != original) header("User-Agent",context.agent) }.build())
-            if (rewritten != original && URI(original).path.endsWith(".mpd") && response.isSuccessful) {
+            val path = URI(original).path
+            val master = context.kind == "zona-hls-v1" && path == URI(context.media).path &&
+                request.url.host == URI(context.media).host && URI(original).rawQuery == URI(context.media).rawQuery
+            if (rewritten != original && (path.endsWith(".mpd") || master) && response.isSuccessful) {
                 try {
-                    val rendered = rewriteManifest(response.body.string(), context)
+                    val rendered = if (path.endsWith(".mpd")) rewriteManifest(response.body.string(), context)
+                        else ZonaHls.rewrite(response.body.string(),context)
                     response.newBuilder().request(request).header("Content-Length",rendered.toByteArray(Charsets.UTF_8).size.toString())
-                        .body(rendered.toResponseBody("application/dash+xml".toMediaType())).build()
+                        .body(rendered.toResponseBody((if (path.endsWith(".mpd")) "application/dash+xml" else "application/vnd.apple.mpegurl").toMediaType())).build()
                 } catch (error: Exception) {
                     response.close()
                     throw java.io.IOException("Zona: видеосервер вернул неподдерживаемый манифест",error)
@@ -157,7 +163,7 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
         alphabetCache = System.currentTimeMillis() to result
         return result
     }
-    suspend fun load(key: String, season: Int?, episode: Int?): Found {
+    suspend fun load(key: String, season: Int?, episode: Int?): List<Found> {
         require(key.matches(Regex("\\d+")))
         val embed = config().replace("{key}",key)
         val html = SourceHttp.get("Zona", embed, headers = headers, timeoutSeconds = 7).text
@@ -169,8 +175,6 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
                 ?.path("episodes")?.firstOrNull { it.path("episode").asText().toIntOrNull() == episode && !it.path("blocked").asBoolean() }
                 ?: throw ErrorLoadingException("Zona: нужная серия отсутствует в основном плеере")
         }
-        val url = media.path("dash").asText().takeIf(StreamTools::isHttp)
-            ?: throw ErrorLoadingException("Zona: основной плеер не выдал видео DASH")
         val variable = Regex("""\+(['"])(&)\1\+(\w+)""").find(html)?.groupValues?.get(3)
             ?: throw ErrorLoadingException("Zona: изменились параметры видеосервера")
         val parameter = Regex("""\b${Regex.escape(variable)}\s*=\s*(["'])([^"']+)\1""").findAll(html).lastOrNull()?.groupValues?.get(2)
@@ -178,14 +182,26 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
         val epoch = Regex("\\bunixTime\\s*=\\s*(\\d+)").find(html)?.groupValues?.get(1)?.toLongOrNull()
             ?: throw ErrorLoadingException("Zona: время видеосервера отсутствует")
         val names = media.path("audio").path("names").map { it.asText() }
-        val context = Context(media=url, alphabet=alphabet(embed), parameter=parameter, epoch=epoch, observed=System.currentTimeMillis(), agent=ua)
+        val base = Context(alphabet=alphabet(embed), parameter=parameter, epoch=epoch, observed=System.currentTimeMillis(), agent=ua)
+        val subs = media.path("cc").mapNotNull { node -> node.path("url").asText().takeIf(StreamTools::isHttp)?.let { Sub(node.path("name").asText("Субтитры"),it) } }
+        return coroutineScope {
+            listOf("dash","hls").mapNotNull { format -> media.path(format).asText().takeIf(StreamTools::isHttp)?.let { format to it } }
+                .map { (format,url) -> async {
+                    try {
+                        if (format == "hls") ZonaHls.load(url,base,names,subs)
+                        else dash(url,base.copy(media=url),names,subs)
+                    } catch (cancelled: CancellationException) { throw cancelled }
+                      catch (_: Exception) { null }
+                } }.mapNotNull { it.await() }
+        }
+    }
+    private suspend fun dash(url: String, context: Context, names: List<String>, subs: List<Sub>): Found {
         require(context.valid())
         val response = SourceHttp.get("Zona",context.transform(url),headers=headers,timeoutSeconds=6)
         val document = manifest(response.text)
         val voices = namedAudio(document,names)
         val variants = variants(document)
         if (variants.isEmpty()) throw ErrorLoadingException("Zona: разрешения основного видео отсутствуют")
-        val subs = media.path("cc").mapNotNull { node -> node.path("url").asText().takeIf(StreamTools::isHttp)?.let { Sub(node.path("name").asText("Субтитры"),it) } }
         // Verify initialization, early and middle media for every video resolution and every audio track.
         withContext(Dispatchers.IO) {
             val client = com.lagradost.cloudstream3.app.baseClient.newBuilder().callTimeout(4,java.util.concurrent.TimeUnit.SECONDS).build()
