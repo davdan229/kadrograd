@@ -28,9 +28,13 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+          cache: gradle
+          cache-dependency-path: client/upstream.json
       - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
       - name: Prepare pinned client source
         run: |
+          sudo apt-get update -qq
+          sudo apt-get install --no-install-recommends -y ffmpeg
           python3 client/prepare.py .client-work/upstream
           python3 client/make_test_media.py .client-work/upstream/app/src/androidTest/assets/adaptive
       - name: Build Android client and tests
