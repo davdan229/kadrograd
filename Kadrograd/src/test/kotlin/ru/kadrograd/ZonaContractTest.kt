@@ -59,6 +59,18 @@ class ZonaContractTest {
         assertEquals(base, provider.mainUrl)
         assertFalse(provider.hasDownloadSupport)
     }
+    @Test fun fourKRowShowsOnlyVerifiedMoviesFromThisCatalog() = runBlocking {
+        val uhd = listOf(ZonaTracks.Variant(3840, 2160))
+        provider.badges.observe("$base/movies/film", uhd)
+        provider.badges.observe("$base/tvseries/series", uhd)
+        provider.badges.observe("https://elsewhere.example/movies/other", uhd)
+        provider.badges.observe("$base/movies/full-hd", listOf(ZonaTracks.Variant(1920, 1080)))
+        reply = { 200 to """{"data":{"slug":"film","title":"Фильм","kp_id":123}}""" }
+        val row = provider.getMainPage(1, MainPageRequest("Фильмы в 4K", "verified-4k", false))
+        assertEquals(SearchQuality.FourK, row.items.single().list.single().quality)
+        assertEquals("/api/movies/film", requests.single().url.encodedPath)
+        assertFalse(row.hasNext)
+    }
     @Test fun searchEncodesQueryAndDoesNotIncludeVideosFiltersOrTrailers() = runBlocking {
         reply = { 200 to """<title>Результаты поиска по запросу — Zona</title>
             <a title="Менталист" href="/tvseries/mentalist-2008"><img alt="Сериал Менталист (2008)" src="/poster.jpg"></a>
@@ -92,7 +104,7 @@ class ZonaContractTest {
         assertEquals("$base/poster.jpg", loaded.posterUrl)
         assertEquals(Score.from10(8.1),loaded.score)
         assertEquals("18+",loaded.contentRating)
-        assertEquals("https://cdn.example/backdrop.jpg",loaded.backgroundPosterUrl)
+        assertNull(loaded.backgroundPosterUrl)
         assertEquals("Патрик Джейн",loaded.actors!!.single().roleString)
         assertEquals(listOf(1 to 1, 1 to 2, 7 to 13), loaded.episodes.map { it.season to it.episode })
         assertEquals("Серия 2", loaded.episodes[1].name)

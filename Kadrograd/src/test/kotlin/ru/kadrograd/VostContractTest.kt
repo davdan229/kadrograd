@@ -75,6 +75,14 @@ class VostContractTest {
         assertTrue(provider.loadLinks(VostProvider.EpisodeRef(154,"101.mp4").toJson(),false,{},links::add))
         assertEquals(listOf(1080,720),links.map { it.quality })
     }
+    @Test fun unavailableArticlePathCanBeLoadedByItsVerifiedId() = runBlocking {
+        reply = { request ->
+            if (request.url.queryParameter("newsid") == "154") 200 to release() else 404 to ""
+        }
+        val card = provider.load("${provider.mainUrl}/tip/tv/154-old-address.html") as AnimeLoadResponse
+        assertEquals(2, card.episodes.getValue(DubStatus.Dubbed).size)
+        assertEquals("154", requests.last().url.queryParameter("newsid"))
+    }
     @Test fun oldApiCardAndEpisodeReferencesUseMirrorAndFreshPlayer() = runBlocking {
         setup()
         val loaded = provider.load("https://api.animevost.org/v1/info?id=154") as AnimeLoadResponse

@@ -40,4 +40,9 @@ internal class QualityBadges(
 
     @Synchronized
     fun dubbed(url: String): Boolean = entries["dub|$url"]?.let { now()-it in 0..ttl } == true
+
+    @Synchronized
+    fun fourKPages(): List<String> = entries.entries.asSequence()
+        .filter { (key, stamp) -> !key.startsWith("dub|") && now()-stamp in 0..ttl }
+        .map { it.key }.toList().asReversed()
 }

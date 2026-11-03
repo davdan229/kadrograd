@@ -102,9 +102,17 @@ class VostProvider(baseUrl: String) : QualityProvider() {
     }
     private suspend fun details(id: Int, path: String? = null): Document {
         val selected = articlePath(path,id) ?: pagePaths[id]
-        val doc = document(mainUrl + (selected ?: "/index.php?newsid=$id"))
-        if (doc.select(".shortstory [id=ratig-layer-$id]").isEmpty())
-            throw ErrorLoadingException("AnimeVost: запрошенный релиз не найден на зеркале")
+        val base = mainUrl
+        val byId = "/index.php?newsid=$id"
+        val backup = when (base) {
+            "https://v14.vost.pw" -> "https://animevost.org"
+            "https://animevost.org" -> "https://v14.vost.pw"
+            else -> base
+        }
+        val doc = firstReachable(listOf(base + (selected ?: byId), backup + byId), alternateDelayMillis = 1_500) { url ->
+            document(url).takeIf { it.select(".shortstory [id=ratig-layer-$id]").isNotEmpty() }
+                ?: throw ErrorLoadingException("AnimeVost: ответ относится к другому релизу")
+        } ?: throw ErrorLoadingException("AnimeVost: релиз не найден или недоступен на проверенных адресах")
         articlePath(doc.location(),id)?.let { pagePaths[id] = it }
         return doc
     }

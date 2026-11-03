@@ -32,7 +32,8 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         "movies" to "Фильмы", "series" to "Сериалы",
         "movies/filter?genre=multfilm" to "Мультфильмы",
         "series/filter?genre=multfilm" to "Мультсериалы",
-        "series/filter?genre=anime" to "Аниме-сериалы", "movies/filter?genre=anime" to "Аниме-фильмы"
+        "series/filter?genre=anime" to "Аниме-сериалы", "movies/filter?genre=anime" to "Аниме-фильмы",
+        "verified-4k" to "Фильмы в 4K"
     )
     internal var videoApiOrigins = listOf("https://apiw1.mzona.net", "https://apir1.mzona.net")
     internal var streamApiOrigins = listOf("https://vsw01.zonasearch.com", "https://vsr01.zonasearch.com")
@@ -97,6 +98,23 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         require(page > 0)
         if (mainPage.none { it.data == request.data }) error("неизвестный раздел")
+        if (request.data == "verified-4k") {
+            val prefix = "$mainUrl/movies/"
+            val movies = badges.fourKPages().filter { it.startsWith(prefix) }
+                .map { it.removePrefix(prefix) }.filter(::validSlug)
+            val start = (page.toLong() - 1) * 12
+            val slugs = movies.drop(start.coerceAtMost(movies.size.toLong()).toInt()).take(12)
+            val cards = coroutineScope {
+                val slots = Semaphore(3)
+                slugs.map { slug -> async {
+                    slots.withPermit {
+                        try { card(details(false, slug), false, "") }
+                        catch (_: ErrorLoadingException) { null }
+                    }
+                } }.awaitAll().filterNotNull()
+            }
+            return newHomePageResponse(request.name, cards, hasNext = start + slugs.size < movies.size)
+        }
         val url = "$mainUrl/api/${request.data}${if ('?' in request.data) '&' else '?'}page=$page"
         val result = json<Catalog>(url)
         return newHomePageResponse(request.name, result.data.mapNotNull { card(it, request.data.startsWith("series"), request.data) },
@@ -184,7 +202,6 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
     }
     private fun LoadResponse.applyDetails(title: Title, poster: String?) {
         posterUrl = poster
-        backgroundPosterUrl = title.backdrop?.takeIf(StreamTools::isHttp)
         year = title.year
         plot = title.description
         tags = title.meta?.tags?.filter { it.type == "genre" }?.map { it.title }
@@ -402,7 +419,7 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
     data class Detail(@JsonProperty("data") val data: Title? = null)
     data class Title(@JsonProperty("slug") val slug: String = "", @JsonProperty("title") val title: String = "",
         @JsonProperty("cover_url") val cover: String? = null, @JsonProperty("year") val year: Int? = null,
-        @JsonProperty("backdrop_url") val backdrop: String? = null, @JsonProperty("rating") val rating: Double? = null,
+        @JsonProperty("rating") val rating: Double? = null,
         @JsonProperty("duration") val duration: Int? = null, @JsonProperty("age_limit") val ageLimit: Int? = null,
         @JsonProperty("description") val description: String? = null, @JsonProperty("kp_id") val kpId: Int? = null,
         @JsonProperty("is_trailer") val trailer: Boolean = false, @JsonProperty("meta") val meta: Meta? = null,

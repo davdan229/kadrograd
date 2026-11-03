@@ -117,7 +117,7 @@ class ZonaLiveCheck {
         val loaded = api.load(card.url) as TvSeriesLoadResponse
         assertEquals(TvType.Anime, loaded.type); assertEquals(74,loaded.episodes.size)
         play(loaded.episodes.first().data); play(loaded.episodes.last().data)
-        for (request in api.mainPage) {
+        for (request in api.mainPage.filter { it.data != "verified-4k" }) {
             val first = api.getMainPage(1, MainPageRequest(request.name,request.data,false))
             val second = api.getMainPage(2, MainPageRequest(request.name,request.data,false))
             assertTrue(first.hasNext); assertTrue(first.items.single().list.isNotEmpty()); assertTrue(second.items.single().list.isNotEmpty())
