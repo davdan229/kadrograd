@@ -2,7 +2,7 @@
 
 Русскоязычное расширение для **Cloudstream на Android**. Ищет фильмы, сериалы, мультфильмы и аниме в подключённых каталогах. Год выпуска не ограничен. Видео воспроизводится с серверов источников.
 
-**Версия 18** · [Скачать пакет .cs3](https://raw.githubusercontent.com/davdan229/kadrograd/builds/packages/Kadrograd-328f75692ee6eedb3a9133d6550dfb115bba0fda0187e0045e04cdc43037c52f.cs3) · [Сборки GitHub Actions](https://github.com/davdan229/kadrograd/actions/workflows/build.yml)
+**Версия 19** · [Скачать пакет .cs3](https://raw.githubusercontent.com/davdan229/kadrograd/builds/packages/Kadrograd-7c868aa395938f3205e040c6f5cc6614419af0c1d1ce2218a49a2437e5cf71b8.cs3) · [Сборки GitHub Actions](https://github.com/davdan229/kadrograd/actions/workflows/build.yml)
 
 ## Установка и обновление
 
@@ -33,7 +33,7 @@
 | --- | --- |
 | **Zona** | Фильмы, сериалы, мультфильмы, мультсериалы и аниме. DASH и HLS с выбором качества и звука; прямые MP4/HLS как дополнительные варианты. На Chromecast доступны только прямые потоки. Скачивание в расширении отключено: [справка Zona](https://az1.zona.pub/faq) указывает на ограничение для аккаунтов без премиума. |
 | **AniLibria** | Аниме с озвучкой AniLibria. HLS 480p, 720p и 1080p при наличии. Доступна кнопка скачивания Cloudstream. |
-| **AnimeVost** | Аниме с веб-зеркала `v14.vost.pw`. MP4 480p и 720p при наличии. Доступна кнопка скачивания Cloudstream. |
+| **AnimeVost** | Аниме с веб-зеркала `v14.vost.pw`. Разрешение зависит от опубликованных MP4. Доступна кнопка скачивания Cloudstream. |
 | **KinoVibe, HDRezka, Filmix** | Дополнительные адаптеры, выключены по умолчанию. KinoVibe выдаёт гостевое SD; HDRezka и Filmix могут не выдавать рабочие ссылки. |
 
 Адреса источников и дополнительные адаптеры настраиваются через шестерёнку расширения. После изменения набора источников перезапустите Cloudstream.
