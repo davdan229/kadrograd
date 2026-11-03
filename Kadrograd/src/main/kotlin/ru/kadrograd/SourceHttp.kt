@@ -37,6 +37,11 @@ internal object SourceHttp {
     /** A transient catalogue failure can be retried once without increasing the normal wait budget. */
     suspend fun getCatalog(source: String, url: String, referer: String? = null,
         headers: Map<String, String> = emptyMap()): String =
+        getCatalogOrNull(source,url,referer,headers)
+            ?: throw ErrorLoadingException("$source: не удалось получить ответ каталога через эту сеть")
+
+    suspend fun getCatalogOrNull(source: String, url: String, referer: String? = null,
+        headers: Map<String, String> = emptyMap()): String? =
         withTimeoutOrNull((REQUEST_SECONDS + 1) * 1_000) {
             for (attempt in 0..1) {
                 try {
@@ -44,19 +49,20 @@ internal object SourceHttp {
                     val text = response.okhttpResponse.use { raw ->
                         when {
                             raw.isSuccessful -> withContext(Dispatchers.IO) { response.text }
-                            attempt == 0 && raw.code in setOf(502,503,504) && raw.header("Retry-After") == null -> null
+                            raw.code in setOf(502,503,504) && raw.header("Retry-After") == null -> null
                             else -> throw ErrorLoadingException("$source: сервер вернул HTTP ${raw.code}")
                         }
                     }
                     if (text != null) return@withTimeoutOrNull text
                 } catch (failure: IOException) {
-                    if (attempt == 1 || failure is javax.net.ssl.SSLException || failure is java.net.ProtocolException)
-                        throw ErrorLoadingException("$source: не удалось получить ответ каталога через эту сеть")
+                    if (failure is javax.net.ssl.SSLException || failure is java.net.ProtocolException)
+                        throw ErrorLoadingException("$source: не удалось прочитать ответ каталога")
+                    if (attempt == 1) return@withTimeoutOrNull null
                 }
                 if (attempt == 0) delay(200)
             }
             null
-        } ?: throw ErrorLoadingException("$source: каталог не ответил вовремя через эту сеть")
+        }
 
     suspend fun post(source: String, url: String, data: Map<String, String>, timeoutSeconds: Long = REQUEST_SECONDS,
         headers: Map<String,String> = emptyMap(), referer: String? = null): NiceResponse {

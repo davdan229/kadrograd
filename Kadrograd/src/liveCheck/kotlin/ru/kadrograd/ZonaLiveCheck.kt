@@ -13,6 +13,10 @@ import java.net.URI
 /** Opt-in checks against Zona's current public website and media endpoints. */
 class ZonaLiveCheck {
     private val api = ZonaProvider("https://w1.zona.im")
+    @Test fun publicSearchSuggestionsReturnExactSeries() = runBlocking {
+        val result = api.suggestions("Менталист").orEmpty()
+        assertTrue(result.any { it.url.endsWith("/tvseries/mentalist-2008") && it.name == "Менталист" })
+    }
     private fun sample(link: ExtractorLink) {
         val client = app.baseClient.newBuilder().callTimeout(12, TimeUnit.SECONDS).apply {
             api.getVideoInterceptor(link)?.let(::addInterceptor)
@@ -95,7 +99,13 @@ class ZonaLiveCheck {
     }
     @Test fun mentalistAllSeasonsAndFirstLastMedia() = runBlocking {
         val card = api.search("Менталист").first { it.url.endsWith("/mentalist-2008") }
-        val loaded = api.load(card.url) as TvSeriesLoadResponse
+        verifyMentalist(card.url)
+    }
+    @Test fun mentalistDirectCardAndMediaWithoutSearch() = runBlocking {
+        verifyMentalist("${api.mainUrl}/tvseries/mentalist-2008")
+    }
+    private suspend fun verifyMentalist(url: String) {
+        val loaded = api.load(url) as TvSeriesLoadResponse
         assertEquals(7, loaded.episodes.map { it.season }.distinct().size)
         assertEquals(150, loaded.episodes.size)
         assertEquals(1,loaded.episodes.first().episode); assertEquals(13,loaded.episodes.last().episode)

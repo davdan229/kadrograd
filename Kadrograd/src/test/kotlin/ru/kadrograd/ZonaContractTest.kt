@@ -25,6 +25,7 @@ class ZonaContractTest {
                 requests += request
                 val (code, body) = reply(request)
                 return MockResponse.Builder().code(code).body(body).addHeader("Date", "Sun, 18 Oct 2026 04:19:18 GMT")
+                    .apply { if (request.method == "POST") addHeader("Content-Type","text/x-component") }
                     .headersDelay(headerDelay(request),java.util.concurrent.TimeUnit.MILLISECONDS).build()
             }
         }
@@ -62,6 +63,7 @@ class ZonaContractTest {
             <a title="Жанр" href="/movies/filter/genre-anime"><img></a><a title="Трейлер" href="/trailers/film"><img></a>""" }
         assertEquals("Менталист", provider.search("Менталист & я").single().name)
         assertTrue(requests.single().url.encodedPath.contains("%26"))
+        assertEquals("identity",requests.single().headers["Accept-Encoding"])
     }
     @Test fun allPublishedSeasonsUseExactSeasonAndEpisodeNumbers() = runBlocking {
         setup()
@@ -69,6 +71,23 @@ class ZonaContractTest {
         assertEquals(listOf(1 to 1, 1 to 2, 7 to 13), loaded.episodes.map { it.season to it.episode })
         assertTrue(requests.any { it.url.queryParameter("season") == "7" })
         assertFalse(loaded.episodes.any { it.data.contains("signature") })
+    }
+    @Test fun unavailableSearchPageFallsBackToPublishedSuggestionsButAccessDenialDoesNot() = runBlocking {
+        var status = 502
+        reply = { req ->
+            if (req.method == "POST") 200 to """0:{"a":"$@1","f":""}
+                |1:[{"title":"Менталист","slug":"mentalist-2008","type":"series","year":2008,"is_published":1},
+                |{"title":"Трейлер","slug":"trailer","type":"movie","is_published":1,"is_manifest":1}]""".trimMargin().replace(",\n",",")
+            else status to ""
+        }
+        assertEquals("Менталист",provider.search("Менталист").single().name)
+        assertEquals(listOf("GET","GET","POST"),requests.map { it.method })
+        assertTrue(requests.last().body!!.utf8().contains("Менталист"))
+        requests.clear()
+        status = 403
+        try { provider.search("Менталист"); fail("Access denial must not trigger fallback") }
+        catch (e: ErrorLoadingException) { assertTrue(e.message.orEmpty().contains("403")) }
+        assertEquals(listOf("GET"),requests.map { it.method })
     }
     @Test fun playbackRefreshesUrlsPassesVoiceQualityAndSubtitles() = runBlocking {
         setup(); val links = mutableListOf<ExtractorLink>(); val subs = mutableListOf<SubtitleFile>()

@@ -15,6 +15,10 @@ import java.net.URLEncoder
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.TimeZone
+import java.util.concurrent.TimeUnit
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 
 class ZonaProvider(baseUrl: String) : QualityProvider() {
     override var mainUrl = baseUrl
@@ -74,7 +78,11 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.isBlank()) return emptyList()
         val url = "$mainUrl/search/${escaped(query.trim())}"
-        val doc = org.jsoup.Jsoup.parse(SourceHttp.getCatalog("Zona", url, headers = headers),url)
+        // The compressed HTML response can stall after HTTP 200; the JSON endpoints use the normal encoding.
+        val html = SourceHttp.getCatalogOrNull("Zona", url, referer = "$mainUrl/",
+            headers = headers + mapOf("Accept" to "text/html", "Accept-Encoding" to "identity"))
+            ?: return suggestions(query.trim()) ?: error("не удалось получить ответ поиска через эту сеть")
+        val doc = org.jsoup.Jsoup.parse(html,url)
         if (!doc.title().contains("Результаты поиска", true)) error("поиск недоступен или изменился")
         return doc.select("a[title][href]").mapNotNull { a ->
             val path = a.attr("href")
@@ -85,6 +93,33 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
                 posterUrl = a.selectFirst("img")?.attr("src")?.let(::fixUrl); this.year = year
             }
         }.distinctBy { it.url }
+    }
+    internal suspend fun suggestions(query: String): List<SearchResponse>? = withContext(Dispatchers.IO) {
+        // Public Next.js search box action. If the site changes the action, the normal HTML search still works.
+        val request = Request.Builder().url("$mainUrl/")
+            .header("Next-Action","40e13530e78a380c4fcbb1ee15fa5df27b78cb9777")
+            .header("Accept","text/x-component").header("Origin",mainUrl).header("Referer","$mainUrl/")
+            .header("User-Agent",ua)
+            .post(listOf(mapOf("query" to query)).toJson().toRequestBody("text/plain; charset=utf-8".toMediaType())).build()
+        val client = app.baseClient.newBuilder().callTimeout(5,TimeUnit.SECONDS).build()
+        try {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful || response.header("Content-Type").orEmpty().substringBefore(';') != "text/x-component")
+                    return@withContext null
+                val body = response.body.source()
+                if (body.request(128_001)) return@withContext null
+                val lines = body.readUtf8().lineSequence().toList()
+                val envelope = lines.firstOrNull { it.startsWith("0:") }?.substringAfter(':') ?: return@withContext null
+                val pointer = tryParseJson<com.fasterxml.jackson.databind.JsonNode>(envelope)?.path("a")?.asText()?.removePrefix("\$@")
+                    ?.takeIf { it.matches(Regex("[a-f0-9]{1,8}")) } ?: return@withContext null
+                val row = lines.firstOrNull { it.startsWith("$pointer:") }?.substringAfter(':') ?: return@withContext null
+                tryParseJson<List<Suggestion>>(row)?.take(50)?.mapNotNull { hit ->
+                    if (hit.published != 1 || hit.abused != 0 || hit.ownAbused != 0 || hit.manifest != 0 ||
+                        hit.type !in setOf("movie","series")) return@mapNotNull null
+                    card(Title(slug=hit.slug,title=hit.title,cover=hit.cover,year=hit.year),hit.type=="series","")
+                }?.distinctBy { it.url }
+            }
+        } catch (_: java.io.IOException) { null }
     }
     private fun identity(url: String): Pair<Boolean, String> {
         val path = runCatching { URI(url).path }.getOrNull().orEmpty()
@@ -283,6 +318,11 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
     }
 
     data class Catalog(@JsonProperty("data") val data: List<Title> = emptyList(), @JsonProperty("links") val links: Links? = null)
+    data class Suggestion(@JsonProperty("slug") val slug: String = "", @JsonProperty("title") val title: String = "",
+        @JsonProperty("type") val type: String = "", @JsonProperty("year") val year: Int? = null,
+        @JsonProperty("cover_url") val cover: String? = null, @JsonProperty("is_published") val published: Int = 0,
+        @JsonProperty("is_abused") val abused: Int = 0, @JsonProperty("is_own_abused") val ownAbused: Int = 0,
+        @JsonProperty("is_manifest") val manifest: Int = 0)
     data class Links(@JsonProperty("next") val next: String? = null)
     data class Detail(@JsonProperty("data") val data: Title? = null)
     data class Title(@JsonProperty("slug") val slug: String = "", @JsonProperty("title") val title: String = "",
