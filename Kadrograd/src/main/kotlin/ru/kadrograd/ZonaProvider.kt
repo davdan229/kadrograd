@@ -62,16 +62,22 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
     }
     private fun pagePath(series: Boolean, slug: String) = "/${if (series) "tvseries" else "movies"}/$slug"
     private fun validSlug(slug: String) = Regex("[a-z0-9]+(?:-[a-z0-9]+)*").matches(slug)
-    private suspend fun detailPoster(url: String?): String? {
+    private suspend fun detailPoster(url: String?, kpId: Int?): String? {
         val original = url ?: return null
         val large = original.replace(Regex("""^(https://img\d+\.zonapic\.com/images/)film_240/"""), "$1film_big/")
         if (large == original) return original
-        return try {
-            val bytes = SourceHttp.readEndpoint(large, headers, 2, head = true) {
-                it.header("Content-Length")?.toLongOrNull() ?: 0
+        suspend fun suitable(candidate: String): Boolean = try {
+            SourceHttp.readEndpoint(candidate, headers, 2, head = true) {
+                val image = it.header("Content-Type")?.startsWith("image/", ignoreCase = true) != false
+                image && (it.header("Content-Length")?.toLongOrNull() ?: 0L) in 1L..2_097_152L
             }
-            if (bytes in 1..2_097_152) large else original
-        } catch (_: java.io.IOException) { original }
+        } catch (_: java.io.IOException) { false }
+        if (suitable(large)) return large
+        if (kpId != null && kpId > 0) {
+            val alternative = "https://st.kp.yandex.net/images/film_big/$kpId.jpg"
+            if (suitable(alternative)) return alternative
+        }
+        return original
     }
     private fun card(row: Title, series: Boolean, category: String): SearchResponse? {
         if (!validSlug(row.slug) || row.title.isBlank() || row.trailer) return null
@@ -195,7 +201,7 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         val title = details(series, slug)
         val ref = mainUrl + pagePath(series, slug)
         val kind = type(series, title.meta?.tags.orEmpty())
-        val poster = detailPoster(title.cover)
+        val poster = detailPoster(title.cover, title.kpId)
         if (!series) return newMovieLoadResponse(title.title, ref, kind, PlaybackRef(ref, title.kpId!!).toJson()) {
             applyDetails(title, poster)
         }
