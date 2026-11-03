@@ -88,6 +88,13 @@ class LibriaProvider(baseUrl: String) : QualityProvider() {
             year = item.year
             plot = item.description
             tags = item.genres.mapNotNull { it.name }
+            score = Score.from10(item.rating?.average?.takeIf { it in 0.1..10.0 })
+            duration = item.duration?.takeIf { it > 0 }
+            contentRating = item.ageRating?.label?.takeIf(String::isNotBlank)
+            actors = item.members.orEmpty().filter { it.role?.value == "voicing" && !it.nickname.isNullOrBlank() }
+                .distinctBy { it.nickname }.take(24).map {
+                    ActorData(Actor(it.nickname.orEmpty(), image(it.user?.avatar?.preview)), roleString = "Озвучка")
+                }.takeIf { it.isNotEmpty() }
             engName = item.name?.english
             showStatus = if (item.ongoing) ShowStatus.Ongoing else ShowStatus.Completed
             addEpisodes(DubStatus.Dubbed, episodes)
@@ -117,7 +124,13 @@ class LibriaProvider(baseUrl: String) : QualityProvider() {
         @JsonProperty("episodeId") val episodeId: String)
     data class Label(@JsonProperty("value") val value: String? = null, @JsonProperty("name") val name: String? = null)
     data class Names(@JsonProperty("main") val main: String? = null, @JsonProperty("english") val english: String? = null)
-    data class Image(@JsonProperty("src") val src: String? = null, @JsonProperty("optimized") val optimized: Image? = null)
+    data class Image(@JsonProperty("src") val src: String? = null, @JsonProperty("optimized") val optimized: Image? = null,
+        @JsonProperty("preview") val preview: String? = null)
+    data class Rating(@JsonProperty("average") val average: Double? = null)
+    data class AgeRating(@JsonProperty("label") val label: String? = null)
+    data class Member(@JsonProperty("role") val role: Label? = null, @JsonProperty("nickname") val nickname: String? = null,
+        @JsonProperty("user") val user: MemberUser? = null)
+    data class MemberUser(@JsonProperty("avatar") val avatar: Image? = null)
     data class Release(
         @JsonProperty("id") val id: Int = 0, @JsonProperty("name") val name: Names? = null,
         @JsonProperty("type") val type: Label? = null, @JsonProperty("year") val year: Int? = null,
@@ -126,6 +139,10 @@ class LibriaProvider(baseUrl: String) : QualityProvider() {
         @JsonProperty("is_blocked_by_geo") val blockedGeo: Boolean = false,
         @JsonProperty("is_blocked_by_copyrights") val blockedCopyright: Boolean = false,
         @JsonProperty("episodes_total") val episodesTotal: Int? = null,
+        @JsonProperty("rating") val rating: Rating? = null,
+        @JsonProperty("age_rating") val ageRating: AgeRating? = null,
+        @JsonProperty("average_duration_of_episode") val duration: Int? = null,
+        @JsonProperty("members") val members: List<Member>? = null,
         @JsonProperty("genres") val genres: List<Label> = emptyList(),
         @JsonProperty("episodes") val episodes: List<LibriaEpisode> = emptyList())
     data class LibriaEpisode(@JsonProperty("id") val id: String = "", @JsonProperty("ordinal") val ordinal: Int = 0,

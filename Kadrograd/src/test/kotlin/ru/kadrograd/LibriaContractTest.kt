@@ -38,6 +38,8 @@ class LibriaContractTest {
     private fun release(blocked: Boolean = false, token: String = "fresh") = """{
         "id":42,"name":{"main":"Проверочный сериал","english":"Test"},"type":{"value":"TV"},
         "year":2007,"is_ongoing":false,"is_blocked_by_geo":$blocked,
+        "rating":{"average":8.7},"age_rating":{"label":"16+"},"average_duration_of_episode":24,
+        "members":[{"nickname":"Голос","role":{"value":"voicing"}},{"nickname":"Таймер","role":{"value":"timing"}}],
         "episodes":[{"id":"episode-a","ordinal":1,"name":"Первая серия",
         "hls_720":"https://cdn.example/video.m3u8?token=$token"}],"unknown_future_field":true
     }"""
@@ -69,6 +71,10 @@ class LibriaContractTest {
         body = { requests++; 200 to release(token = "fresh-$requests") }
         val loaded = provider.load("${provider.mainUrl}/api/v1/anime/releases/42") as AnimeLoadResponse
         assertEquals(2007, loaded.year)
+        assertEquals(Score.from10(8.7), loaded.score)
+        assertEquals(24, loaded.duration)
+        assertEquals("16+", loaded.contentRating)
+        assertEquals("Голос", loaded.actors!!.single().actor.name)
         val data = loaded.episodes[DubStatus.Dubbed]!!.first().data
         assertFalse(data.contains("fresh-1"))
         val links = mutableListOf<ExtractorLink>()

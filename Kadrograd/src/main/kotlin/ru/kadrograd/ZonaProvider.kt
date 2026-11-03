@@ -164,13 +164,27 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         if (title.slug != slug || title.trailer || title.kpId == null) error("карточка не содержит доступного произведения")
         return title
     }
+    private fun LoadResponse.applyDetails(title: Title) {
+        posterUrl = detailPoster(title.cover)
+        backgroundPosterUrl = title.backdrop?.takeIf(StreamTools::isHttp)
+        year = title.year
+        plot = title.description
+        tags = title.meta?.tags?.filter { it.type == "genre" }?.map { it.title }
+        score = Score.from10(title.rating?.takeIf { it in 0.1..10.0 })
+        duration = title.duration?.takeIf { it > 0 }
+        contentRating = title.ageLimit?.takeIf { it in 0..21 }?.let { "$it+" }
+        actors = title.meta?.actors.orEmpty().filter { it.name.isNotBlank() }.distinctBy { it.name }.take(24).map {
+            ActorData(Actor(it.name, it.cover?.takeIf(StreamTools::isHttp)), roleString = it.role?.takeIf(String::isNotBlank))
+        }.takeIf { it.isNotEmpty() }
+    }
+
     override suspend fun load(url: String): LoadResponse {
         val (series, slug) = identity(url)
         val title = details(series, slug)
         val ref = mainUrl + pagePath(series, slug)
         val kind = type(series, title.meta?.tags.orEmpty())
         if (!series) return newMovieLoadResponse(title.title, ref, kind, PlaybackRef(ref, title.kpId!!).toJson()) {
-            posterUrl = detailPoster(title.cover); year = title.year; plot = title.description; tags = title.meta?.tags?.filter { it.type == "genre" }?.map { it.title }
+            applyDetails(title)
         }
         val seasons = title.seasons.filter { !it.banned && it.part > 0 && it.count > 0 }.sortedBy { it.part }
         if (seasons.isEmpty() || seasons.size > 100) error("доступных сезонов нет")
@@ -192,7 +206,7 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         } ?: error("сезоны не загрузились вовремя; попробуйте открыть карточку ещё раз")
         if (episodes.isEmpty()) error("сайт не опубликовал доступных серий")
         return newTvSeriesLoadResponse(title.title, ref, kind, episodes.distinctBy { it.season to it.episode }) {
-            posterUrl = detailPoster(title.cover); year = title.year; plot = title.description; tags = title.meta?.tags?.filter { it.type == "genre" }?.map { it.title }
+            applyDetails(title)
         }
     }
 
@@ -368,10 +382,15 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
     data class Detail(@JsonProperty("data") val data: Title? = null)
     data class Title(@JsonProperty("slug") val slug: String = "", @JsonProperty("title") val title: String = "",
         @JsonProperty("cover_url") val cover: String? = null, @JsonProperty("year") val year: Int? = null,
+        @JsonProperty("backdrop_url") val backdrop: String? = null, @JsonProperty("rating") val rating: Double? = null,
+        @JsonProperty("duration") val duration: Int? = null, @JsonProperty("age_limit") val ageLimit: Int? = null,
         @JsonProperty("description") val description: String? = null, @JsonProperty("kp_id") val kpId: Int? = null,
         @JsonProperty("is_trailer") val trailer: Boolean = false, @JsonProperty("meta") val meta: Meta? = null,
         @JsonProperty("seasons") val seasons: List<Season> = emptyList(), @JsonProperty("episodes") val episodes: List<Episode> = emptyList())
-    data class Meta(@JsonProperty("tags") val tags: List<Tag> = emptyList())
+    data class Meta(@JsonProperty("tags") val tags: List<Tag> = emptyList(),
+        @JsonProperty("actors") val actors: List<CastMember>? = null)
+    data class CastMember(@JsonProperty("name") val name: String = "",
+        @JsonProperty("cover_url") val cover: String? = null, @JsonProperty("role") val role: String? = null)
     data class Tag(@JsonProperty("slug") val slug: String = "", @JsonProperty("title") val title: String = "", @JsonProperty("type") val type: String = "")
     data class Season(@JsonProperty("part") val part: Int = 0, @JsonProperty("episode_count") val count: Int = 0, @JsonProperty("is_banned") val banned: Boolean = false)
     data class Episode(@JsonProperty("part") val part: Int = 0, @JsonProperty("title") val title: String = "", @JsonProperty("cover_url") val cover: String? = null, @JsonProperty("is_banned") val banned: Boolean = false)

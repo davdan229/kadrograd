@@ -32,7 +32,8 @@ class VostContractTest {
         <input name="story"><div class="global_search"></div><div class="shortstory"><div class="shortstoryHead"><h2>
         <a href="/tip/tv/$id-death-note.html">Тетрадь Смерти / Death Note</a></h2></div>
         <div class="shortstoryContent"><img src="/poster.jpg"><p><strong>Год выхода: </strong>2006</p>
-        <p><strong>Тип: </strong>$type</p><div id="ratig-layer-$id"></div></div></div>
+        <p><strong>Тип: </strong>$type</p><p><strong>Количество серий: </strong>2 (25 мин.)</p>
+        <div id="ratig-layer-$id"><span class="current-rating">84</span></div></div></div>
         <script>var data = {"1 серия":"101","2 серия":"102",};</script>
     """
     private fun setup(frame: String = """{"file":"${provider.mainUrl}/720/101.mp4?token=fresh"}""") {
@@ -77,6 +78,8 @@ class VostContractTest {
     @Test fun oldApiCardAndEpisodeReferencesUseMirrorAndFreshPlayer() = runBlocking {
         setup()
         val loaded = provider.load("https://api.animevost.org/v1/info?id=154") as AnimeLoadResponse
+        assertEquals(Score.from100(84), loaded.score)
+        assertEquals(25, loaded.duration)
         assertEquals(2, loaded.episodes.getValue(DubStatus.Dubbed).size)
         val data = loaded.episodes.getValue(DubStatus.Dubbed).first().data
         assertFalse(data.contains("token="))

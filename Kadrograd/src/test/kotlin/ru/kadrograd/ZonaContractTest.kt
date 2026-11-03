@@ -34,6 +34,8 @@ class ZonaContractTest {
     }
     @After fun stop() { server.close() }
     private fun details(season: Int = 1, kp: Int = 412344) = """{"data":{"slug":"mentalist-2008","title":"Менталист","kp_id":$kp,"year":2008,"cover_url":"https://img4.zonapic.com/images/film_240/1/1.jpg",
+        "rating":8.1,"age_limit":18,"backdrop_url":"https://cdn.example/backdrop.jpg",
+        "meta":{"actors":[{"name":"Саймон Бейкер","role":"Патрик Джейн"}]},
         "seasons":[{"part":1,"episode_count":2},{"part":7,"episode_count":1}],
         "episodes":[{"part":${if (season == 7) 13 else 1},"title":"$season серия"}${if (season == 1) ",{\"part\":2,\"title\":\"Вторая\"}" else ""}]}}"""
     private fun stored(ep: Int = 1) = ZonaProvider.PlaybackRef("$base/tvseries/mentalist-2008", 412344, 1, ep).toJson()
@@ -88,6 +90,10 @@ class ZonaContractTest {
         setup()
         val loaded = provider.load("$base/tvseries/mentalist-2008") as TvSeriesLoadResponse
         assertEquals("https://img4.zonapic.com/images/film_big/1/1.jpg", loaded.posterUrl)
+        assertEquals(Score.from10(8.1),loaded.score)
+        assertEquals("18+",loaded.contentRating)
+        assertEquals("https://cdn.example/backdrop.jpg",loaded.backgroundPosterUrl)
+        assertEquals("Патрик Джейн",loaded.actors!!.single().roleString)
         assertEquals(listOf(1 to 1, 1 to 2, 7 to 13), loaded.episodes.map { it.season to it.episode })
         assertTrue(requests.any { it.url.queryParameter("season") == "7" })
         assertFalse(loaded.episodes.any { it.data.contains("signature") })

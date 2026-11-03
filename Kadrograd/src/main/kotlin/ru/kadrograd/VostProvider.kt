@@ -119,6 +119,16 @@ class VostProvider(baseUrl: String) : QualityProvider() {
     override suspend fun load(url: String): LoadResponse = withTimeoutOrNull(15_000) { loadPage(url) }
         ?: throw ErrorLoadingException("AnimeVost: карточка не загрузилась за 15 секунд. Проверьте доступ к странице аниме через эту сеть")
 
+    private fun LoadResponse.applyDetails(node: Element) {
+        posterUrl = poster(node)
+        year = metadata(node, "Год выхода").toIntOrNull()
+        plot = node.selectFirst("[itemprop=description]")?.text()
+        tags = metadata(node, "Жанр").split(',').map(String::trim).filter(String::isNotEmpty)
+        score = Score.from100(node.selectFirst(".current-rating")?.text()?.toDoubleOrNull()?.takeIf { it in 0.1..100.0 })
+        duration = Regex("""(\d+)\s*мин""", RegexOption.IGNORE_CASE).find(metadata(node, "Количество серий"))
+            ?.groupValues?.get(1)?.toIntOrNull()?.takeIf { it > 0 }
+    }
+
     private suspend fun loadPage(url: String): LoadResponse {
         val uri = runCatching { URI(url) }.getOrNull()
         // Recognize cards and episode references saved by versions 1/2 as well.
@@ -135,15 +145,13 @@ class VostProvider(baseUrl: String) : QualityProvider() {
         val path = articlePath(url,id) ?: pagePaths[id]
         val canonical = mainUrl + (path ?: "/index.php?newsid=$id")
         val type = kind(node)
-        val plot = node.selectFirst("[itemprop=description]")?.text()
         if (type == TvType.AnimeMovie && list.size == 1) {
             return newMovieLoadResponse(title(node), canonical, type, EpisodeRef(id, "${list.values.single()}.mp4",path).toJson()) {
-                posterUrl = poster(node); year = metadata(node, "Год выхода").toIntOrNull(); this.plot = plot
+                applyDetails(node)
             }
         }
         return newAnimeLoadResponse(title(node), canonical, type) {
-            posterUrl = poster(node); year = metadata(node, "Год выхода").toIntOrNull(); this.plot = plot
-            tags = metadata(node, "Жанр").split(',').map(String::trim).filter(String::isNotEmpty)
+            applyDetails(node)
             addEpisodes(DubStatus.Dubbed, list.map { (label, video) ->
                 newEpisode(EpisodeRef(id, "$video.mp4",path).toJson(), {
                     name = label
