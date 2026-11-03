@@ -1,6 +1,8 @@
-version = 28
+// CloudStream uses a monotonically increasing integer to find updates.
+version = 29
+val releaseVersion = "1.0.0"
 cloudstream {
-    description = "Кадроград: Zona для кино и сериалов, AniLibria и AnimeVost для аниме. Проверка видеоссылок и ограниченное ожидание. Возможности зависят от источника."
+    description = "Кадроград $releaseVersion. Zona для кино и сериалов, AniLibria и AnimeVost для аниме."
     authors = listOf("davdan229", "hexated", "lxnhere")
     language = "ru"
     status = 1
