@@ -19,6 +19,11 @@ on:
         required: false
         type: boolean
         default: false
+      torrent_only:
+        description: 'Run only the native torrent playback check'
+        required: false
+        type: boolean
+        default: false
 permissions:
   contents: read
   actions: read
@@ -140,6 +145,7 @@ jobs:
         env:
           KADROGRAD_UPGRADE_FROM: https://github.com/davdan229/kadrograd/releases/download/client-v1.0.0-beta.1/CloudStream-Kadrograd-1.0.0-beta.1.apk
           KADROGRAD_UPGRADE_SHA256: da84158d04f396afb3c6765137fdf0ee7a4c81f1b542d4f30cf393e9765a3a09
+          KADROGRAD_TORRENT_ONLY: ${{ inputs.torrent_only }}
         run: bash client/run_android_checks.sh .client-work/upstream
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()

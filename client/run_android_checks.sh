@@ -33,6 +33,17 @@ test "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1
 adb shell input keyevent 82
 status=0
 test_apk="$checkout/app/build/outputs/apk/androidTest/stable/release/app-stable-release-androidTest.apk"
+check_torrent() {
+  adb shell am instrument -w -r -e class com.lagradost.cloudstream3.TorrentPlaybackTest ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/torrent-instrumentation.txt" || status=1
+  grep -q 'OK (1 test)' "$results/torrent-instrumentation.txt" || status=1
+  if grep -q 'FAILURES!!!' "$results/torrent-instrumentation.txt"; then status=1; fi
+}
+if [ "${KADROGRAD_TORRENT_ONLY:-false}" = true ]; then
+  adb install -r -g "$checkout/app/build/outputs/apk/stable/release/app-stable-release.apk"
+  adb install -r "$test_apk"
+  check_torrent
+  exit "$status"
+fi
 if [ -n "${KADROGRAD_UPGRADE_FROM:-}" ]; then
   curl --fail --location --retry 2 --max-time 90 "$KADROGRAD_UPGRADE_FROM" --output "$RUNNER_TEMP/kadrograd-previous.apk"
   printf '%s  %s\n' "$KADROGRAD_UPGRADE_SHA256" "$RUNNER_TEMP/kadrograd-previous.apk" | sha256sum --check
@@ -59,7 +70,5 @@ if ! adb pull /sdcard/Android/data/ru.kadrograd.cloudstream/files/android-checks
 fi
 grep -q 'OK (1 test)' "$results/home-instrumentation.txt" || status=1
 if grep -q 'FAILURES!!!' "$results/home-instrumentation.txt"; then status=1; fi
-adb shell am instrument -w -r -e class com.lagradost.cloudstream3.TorrentPlaybackTest ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/torrent-instrumentation.txt" || status=1
-grep -q 'OK (1 test)' "$results/torrent-instrumentation.txt" || status=1
-if grep -q 'FAILURES!!!' "$results/torrent-instrumentation.txt"; then status=1; fi
+check_torrent
 exit "$status"

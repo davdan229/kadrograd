@@ -112,7 +112,7 @@ class TorrentPlaybackTest {
         override fun close() { server.close(); executor.shutdownNow(); worker.join(1000) }
     }
 
-    @Test fun nativeEnginePlaysTheSelectedFileInUhdWithBothAudioTracks() = runBlocking {
+    @Test fun nativeEnginePlaysTheSelectedFileInUhdWithBothAudioTracks() = runBlocking<Unit> {
         WebSeed().use { seed ->
             ActivityScenario.launch(MainActivity::class.java).use { _ ->
                 val link = newExtractorLink("Fixture", "Synthetic UHD", "${seed.origin}/fixture.torrent?index=1", ExtractorLinkType.TORRENT) {
