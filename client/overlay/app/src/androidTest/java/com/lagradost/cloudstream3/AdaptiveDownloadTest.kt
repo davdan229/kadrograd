@@ -88,7 +88,8 @@ class AdaptiveDownloadTest {
         }
     }
 
-    private fun assertTracks(file: File, expectedWidth: Int, expectedHeight: Int) {
+    private fun assertTracks(file: File, expectedWidth: Int, expectedHeight: Int,
+        expectedVideo: String = "video/x-vnd.on2.vp9", expectedAudio: String = "audio/opus") {
         val extractor = MediaExtractor()
         try {
             extractor.setDataSource(file.absolutePath)
@@ -96,7 +97,9 @@ class AdaptiveDownloadTest {
             val video = formats.single { it.getString(MediaFormat.KEY_MIME)!!.startsWith("video/") }
             assertEquals(expectedWidth, video.getInteger(MediaFormat.KEY_WIDTH))
             assertEquals(expectedHeight, video.getInteger(MediaFormat.KEY_HEIGHT))
+            assertEquals(expectedVideo, video.getString(MediaFormat.KEY_MIME))
             assertEquals(1, formats.count { it.getString(MediaFormat.KEY_MIME)!!.startsWith("audio/") })
+            assertEquals(expectedAudio, formats.single { it.getString(MediaFormat.KEY_MIME)!!.startsWith("audio/") }.getString(MediaFormat.KEY_MIME))
             assertTrue(video.getLong(MediaFormat.KEY_DURATION) >= 1_000_000L)
         } finally { extractor.release() }
     }
@@ -122,7 +125,7 @@ class AdaptiveDownloadTest {
             try {
                 val link = newExtractorLink("Fixture", "Studio B", "${server.origin}/hls/master.m3u8", ExtractorLinkType.M3U8) { quality = 1080 }
                 assertTrue(withTimeout(90_000) { AdaptiveDownload.exportToFile(context, link, output, selection(1080, 4)) })
-                assertTracks(output, 1920, 1080)
+                assertTracks(output, 1920, 1080, "video/avc", "audio/mp4a-latm")
                 assertTrue(server.requests.any { it.contains("audio-b-") })
                 assertFalse(server.requests.any { it.contains("audio-a") })
             } finally { output.delete() }
