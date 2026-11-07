@@ -1,7 +1,18 @@
 package com.lagradost.cloudstream3
 
+import android.app.Instrumentation
+import android.graphics.ImageFormat
+import android.media.ImageReader
 import android.view.View
 import androidx.lifecycle.ViewModelProvider
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.navigation.fragment.NavHostFragment
 import androidx.preference.PreferenceManager
 import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
@@ -10,6 +21,8 @@ import com.lagradost.cloudstream3.mvvm.Resource
 import com.lagradost.cloudstream3.plugins.PluginManager
 import com.lagradost.cloudstream3.plugins.RepositoryManager
 import com.lagradost.cloudstream3.ui.home.HomeViewModel
+import com.lagradost.cloudstream3.utils.ExtractorLink
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -42,6 +55,12 @@ class KadrogradHomeTest {
             assertEquals(PluginManager.getPluginPath(context, "Kadrograd", repo).absolutePath, plugin.filePath)
             assertTrue(File(plugin.filePath).isFile)
             assertTrue(getApiFromNameNull("Кадроград · Zona")!!.hasDownloadSupport)
+            scenario.onActivity { activity ->
+                val navHost = activity.supportFragmentManager.findFragmentById(R.id.nav_host_fragment) as NavHostFragment
+                if (navHost.navController.currentDestination?.id != R.id.navigation_home) {
+                    navHost.navController.navigate(R.id.navigation_home)
+                }
+            }
             val failures = mutableListOf<String>()
             for ((key, name) in listOf("vost" to "Кадроград · AnimeVost", "libria" to "Кадроград · AniLibria", "zona" to "Кадроград · Zona")) {
                 model.loadAndCancel(name, forceReload = true, fromUI = true)
@@ -74,7 +93,54 @@ class KadrogradHomeTest {
                     bitmap.recycle()
                 }
             }
+            try {
+                renderZonaUhd(instrumentation)
+            } catch (failure: Exception) {
+                failures.add("Zona UHD playback: ${failure.message}")
+            }
             assertTrue(failures.joinToString("\n"), failures.isEmpty())
+        }
+    }
+
+    private suspend fun renderZonaUhd(instrumentation: Instrumentation) {
+        val api = requireNotNull(getApiFromNameNull("Кадроград · Zona"))
+        val shelf = api.getMainPage(1, MainPageRequest("Фильмы в 4K", "verified-4k", false))
+        val card = shelf.items.flatMap { it.list }.single { it.url.endsWith("/movies/slezy-stali") }
+        check(card.quality == SearchQuality.FourK) { "Card has no verified 4K badge" }
+        val movie = api.load(card.url) as MovieLoadResponse
+        val links = mutableListOf<ExtractorLink>()
+        api.loadLinks(movie.dataUrl, false, {}, links::add)
+        val link = links.single { it.quality == 2160 && it.name.startsWith("Blender Foundation") }
+        val source = ProgressiveMediaSource.Factory(
+            DefaultHttpDataSource.Factory().setDefaultRequestProperties(link.headers).setConnectTimeoutMs(8_000)
+                .setReadTimeoutMs(8_000)
+        ).createMediaSource(MediaItem.fromUri(link.url))
+        val firstFrame = CompletableDeferred<VideoSize>()
+        val reader = ImageReader.newInstance(3840, 1714, ImageFormat.PRIVATE, 2)
+        var player: ExoPlayer? = null
+        try {
+            instrumentation.runOnMainSync {
+                val active = ExoPlayer.Builder(instrumentation.targetContext).build()
+                player = active
+                active.addListener(object : Player.Listener {
+                    override fun onRenderedFirstFrame() {
+                        firstFrame.complete(active.videoSize)
+                    }
+                    override fun onPlayerError(error: PlaybackException) {
+                        firstFrame.completeExceptionally(error)
+                    }
+                })
+                active.setVideoSurface(reader.surface)
+                active.setMediaSource(source)
+                active.prepare()
+                active.play()
+            }
+            val size = withTimeout(35_000) { firstFrame.await() }
+            check(size.width == 3840 && size.height == 1714) { "Expected 3840×1714, got ${size.width}×${size.height}" }
+            android.util.Log.i("KadrogradUhdTest", "First frame rendered at ${size.width}×${size.height}")
+        } finally {
+            instrumentation.runOnMainSync { player?.release() }
+            reader.close()
         }
     }
 }

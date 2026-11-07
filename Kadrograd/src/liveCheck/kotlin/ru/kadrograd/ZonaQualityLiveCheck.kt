@@ -12,6 +12,22 @@ import java.util.concurrent.TimeUnit
 
 class ZonaQualityLiveCheck {
     private val api = ZonaProvider("https://w1.zona.im")
+    @Test fun openBlenderFilmsPopulateTheFreshUhdShelfAndPlayWithoutTheZonaVideoServer() = runBlocking {
+        api.videoApiOrigins = emptyList()
+        val shelf = api.getMainPage(1, MainPageRequest("Фильмы в 4K", "verified-4k", false))
+        val cards = shelf.items.single().list
+        assertEquals(BlenderUhd.films.map { it.slug }, cards.map { it.url.substringAfterLast('/') })
+        for (card in cards) {
+            assertEquals(SearchQuality.FourK, card.quality)
+            val details = api.load(card.url) as MovieLoadResponse
+            val links = mutableListOf<ExtractorLink>()
+            assertTrue(api.loadLinks(details.dataUrl, false, {}, links::add))
+            println("${card.name}: ${links.map { it.name }}")
+            assertTrue("Expected 4K, 1080p and 720p for ${card.name}", links.map { it.quality }.containsAll(listOf(2160, 1080, 720)))
+            assertTrue(links.all { it.type == ExtractorLinkType.VIDEO && URI(it.url).host == "upload.wikimedia.org" })
+        }
+    }
+
     @Test fun publishedRickAndMortyPlayerReturnsSyendukSegments() = runBlocking {
         val sources = java.util.concurrent.ConcurrentLinkedQueue<ZonaTracks.Found>()
         ZonaTracks({listOf("https://vsw01.zonasearch.com")},

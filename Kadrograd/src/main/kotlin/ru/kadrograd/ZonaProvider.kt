@@ -115,20 +115,31 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         if (mainPage.none { it.data == request.data }) error("неизвестный раздел")
         if (request.data == "verified-4k") {
             val prefix = "$mainUrl/movies/"
+            val openCards = coroutineScope {
+                BlenderUhd.films.map { film -> async {
+                    val title = try { details(false, film.slug) }
+                        catch (_: ErrorLoadingException) { return@async null }
+                    if (title.kpId != film.kpId) return@async null
+                    val video = BlenderUhd.uhd(film) ?: return@async null
+                    badges.observe(prefix + film.slug, listOf(video.variant))
+                    card(title, false, "")?.let { film.slug to it }
+                } }.awaitAll().filterNotNull().toMap()
+            }
             val movies = badges.fourKPages().filter { it.startsWith(prefix) }
                 .map { it.removePrefix(prefix) }.filter(::validSlug)
+            val current = (openCards.keys + movies).toList()
             val start = (page.toLong() - 1) * 12
-            val slugs = movies.drop(start.coerceAtMost(movies.size.toLong()).toInt()).take(12)
+            val slugs = current.drop(start.coerceAtMost(current.size.toLong()).toInt()).take(12)
             val cards = coroutineScope {
                 val slots = Semaphore(3)
                 slugs.map { slug -> async {
                     slots.withPermit {
-                        try { card(details(false, slug), false, "") }
+                        try { openCards[slug] ?: card(details(false, slug), false, "") }
                         catch (_: ErrorLoadingException) { null }
                     }
                 } }.awaitAll().filterNotNull()
             }
-            return newHomePageResponse(request.name, cards, hasNext = start + slugs.size < movies.size)
+            return newHomePageResponse(request.name, cards, hasNext = start + slugs.size < current.size)
         }
         val url = "$mainUrl/api/${request.data}${if ('?' in request.data) '&' else '?'}page=$page"
         val result = json<Catalog>(url)
@@ -352,12 +363,18 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         val ref = mainUrl + pagePath(series, slug)
         val current = details(series, slug, stored.season)
         if (current.kpId != stored.kpId || (series && current.episodes.none { it.part == stored.episode && !it.banned })) error("выбранная серия больше не доступна")
-        val time = clock()
+        val openFilm = if (series || isCasting) null else BlenderUhd.films.firstOrNull { it.slug == slug && it.kpId == stored.kpId }
         val key = if (series) "S${stored.season.toString().padStart(2, '0')}E${stored.episode.toString().padStart(2, '0')}" else ""
         val readyDirect = java.util.concurrent.ConcurrentLinkedQueue<VerifiedStream>()
         val readyNative = java.util.concurrent.ConcurrentLinkedQueue<ZonaTracks.Found>()
+        val readyOpen = java.util.concurrent.ConcurrentLinkedQueue<BlenderUhd.Video>()
         val completed = withTimeoutOrNull(sourceBudgetMillis) {
             coroutineScope {
+                if (openFilm != null) launch { readyOpen.addAll(BlenderUhd.choices(openFilm)) }
+                val time = try { clock() } catch (failure: ErrorLoadingException) {
+                    if (openFilm == null) throw failure
+                    return@coroutineScope
+                }
                 suspend fun candidates(types: String): List<Source> =
                     (tryParseJson<Sources>(transport(videoApiOrigins, "/getVideoSources",
                         "movie_source_types=$types&kinopoisk_id=${stored.kpId}&episode_key=$key&trailer=false", time))
@@ -397,11 +414,18 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         } ?: false
         val playback = Playback(readyDirect.sortedByDescending { it.quality },
             readyNative.sortedWith(compareBy<ZonaTracks.Found> { it.av1 }.thenBy { it.context.kind }))
-        badges.observe(ref,playback.native.flatMap { it.variants } + playback.direct.mapNotNull { it.uhd },
+        badges.observe(ref,playback.native.flatMap { it.variants } + playback.direct.mapNotNull { it.uhd } + readyOpen.map { it.variant },
             playback.native.flatMap { it.context.voices.values } + playback.direct.map { it.stream.translation })
-        if (playback.direct.isEmpty() && playback.native.isEmpty()) {
+        if (playback.direct.isEmpty() && playback.native.isEmpty() && readyOpen.isEmpty()) {
             if (!completed) error("видеосерверы не ответили вовремя")
             error("доступных видеоссылок для этой серии или фильма нет в текущей сети")
+        }
+        readyOpen.forEach { video ->
+            callback(newExtractorLink(name, "Blender Foundation · Оригинал · ${video.variant.dimensions} · WebM",
+                video.url, ExtractorLinkType.VIDEO) {
+                quality = video.quality
+                headers = BlenderUhd.headers
+            })
         }
         playback.native.forEach { native ->
             val hls = native.context.kind == "zona-hls-v1"

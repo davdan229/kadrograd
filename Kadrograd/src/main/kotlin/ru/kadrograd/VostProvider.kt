@@ -9,6 +9,7 @@ import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -20,6 +21,7 @@ import kotlinx.coroutines.sync.withLock
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URI
+import java.util.concurrent.ConcurrentHashMap
 
 /** Uses the official web mirror with the public API as a fallback. */
 class VostProvider(baseUrl: String) : QualityProvider() {
@@ -238,12 +240,23 @@ class VostProvider(baseUrl: String) : QualityProvider() {
         val endpoint = infoEndpoint ?: "https://api.animevost.org/v1/info".takeIf {
             mainUrl in setOf("https://v14.vost.pw", "https://animevost.org")
         }
+        val failures = ConcurrentHashMap<String, String>()
         return firstReachable(listOfNotNull("web", endpoint), alternateDelayMillis = 900) { source ->
-            (if (source == "web") web() else apiRelease(source, id))
-                .takeIf { it.name.isNotBlank() && it.episodes.isNotEmpty() }
-                ?: throw ErrorLoadingException("AnimeVost: нет данных о релизе")
-        } ?: cachedApiRelease(id)
-            ?: throw ErrorLoadingException("AnimeVost: релиз не найден или недоступен на проверенных адресах")
+            try {
+                (if (source == "web") web() else apiRelease(source, id))
+                    .takeIf { it.name.isNotBlank() && it.episodes.isNotEmpty() }
+                    ?: throw ErrorLoadingException("AnimeVost: нет данных о релизе")
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                val route = if (source == "web") "зеркало" else "API"
+                failures[route] = (failure as? ErrorLoadingException)?.message?.removePrefix("AnimeVost: ")
+                    ?: failure.javaClass.simpleName
+                throw failure
+            }
+        } ?: cachedApiRelease(id) ?: throw ErrorLoadingException(
+            "AnimeVost: карточка недоступна (${failures.entries.sortedBy { it.key }.joinToString(", ") { "${it.key} — ${it.value}" }})"
+        )
     }
 
     private fun cachedApiRelease(id: Int): Release? {

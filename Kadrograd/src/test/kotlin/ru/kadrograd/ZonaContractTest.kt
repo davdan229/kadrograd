@@ -88,7 +88,8 @@ class ZonaContractTest {
         reply = { 200 to """{"data":{"slug":"film","title":"Фильм","kp_id":123}}""" }
         val row = provider.getMainPage(1, MainPageRequest("Фильмы в 4K", "verified-4k", false))
         assertEquals(SearchQuality.FourK, row.items.single().list.single().quality)
-        assertEquals("/api/movies/film", requests.single().url.encodedPath)
+        assertEquals(setOf("/api/movies/film", "/api/movies/bolshoi-bak", "/api/movies/sintel", "/api/movies/slezy-stali"),
+            requests.map { it.url.encodedPath }.toSet())
         assertFalse(row.hasNext)
     }
     @Test fun searchEncodesQueryAndDoesNotIncludeVideosFiltersOrTrailers() = runBlocking {

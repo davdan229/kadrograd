@@ -1,4 +1,4 @@
-"""Bounded checks of the public catalogs and one published media variant."""
+"""Bounded checks of the public catalogs and selected published media variants."""
 import json
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urljoin
@@ -31,6 +31,20 @@ def animevost():
         raise ValueError("release identity not present")
     if b"var data" not in body:
         raise ValueError("episode markup not recognized")
+
+
+def zona_uhd():
+    body, _ = fetch("https://w1.zona.im/api/movies/slezy-stali")
+    release = json.loads(body)["data"]
+    if release["slug"] != "slezy-stali" or release["kp_id"] != 694072 or release.get("is_trailer"):
+        raise ValueError("unexpected release")
+    video, _ = fetch(
+        "https://upload.wikimedia.org/wikipedia/commons/1/10/Tears_of_Steel_in_4k_-_Official_Blender_Foundation_release.webm",
+        65_536,
+        {"Range": "bytes=0-65535", "User-Agent": "Kadrograd/1.1 (https://github.com/davdan229/kadrograd)"},
+    )
+    if not video.startswith(bytes.fromhex("1a45dfa3")) or bytes.fromhex("1f43b675") not in video:
+        raise ValueError("WebM header or media cluster not recognized")
 
 
 def animevost_api():
@@ -103,6 +117,7 @@ def check(name, probe):
 
 if __name__ == "__main__":
     results = [check("Zona episode", zona), check("AnimeVost card", animevost),
-               check("AnimeVost API catalog and card", animevost_api), check("AniLibria 1080p sample", libria)]
+               check("AnimeVost API catalog and card", animevost_api), check("AniLibria 1080p sample", libria),
+               check("Zona 4K archive sample", zona_uhd)]
     print(json.dumps(results, indent=2))
     raise SystemExit(any(row["status"] != "ok" for row in results))

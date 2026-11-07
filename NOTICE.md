@@ -12,3 +12,5 @@
 В `build-logic/build.gradle.kts` зависимость Android Gradle Plugin обновлена до 8.13.2 для совместимости D8 с метаданными Kotlin 2.3.
 
 Runtime-зависимости плагина предоставляются клиентом Cloudstream; в `.cs3` не встраиваются сторонние JAR. HTTP-тесты используют MockWebServer (Square/OkHttp, Apache-2.0) только в тестовом окружении.
+
+Фильмы «Большой Бак», «Синтел» и «Слёзы стали» созданы Blender Foundation и распространяются по [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/). Zona открывает полные версии с оригинальными титрами из [архива Wikimedia Commons](https://commons.wikimedia.org/wiki/Category:Blender_movies).

@@ -80,6 +80,8 @@ dependencies {
 
     path = BASE + "utils/downloader/DownloadManager.kt"
     text = replace_once(changes[path], " || link.type == ExtractorLinkType.DASH", " /* DASH is handled by AdaptiveDownload below. */")
+    text = replace_once(text, '                        "mp4",\n                        tryResume,',
+        '                        if (link.url.toUri().lastPathSegment?.endsWith(".webm", ignoreCase = true) == true) "webm" else "mp4",\n                        tryResume,')
     text = replace_once(text, "            when (link.type) {\n                ExtractorLinkType.M3U8 -> {", """            if (link.type == ExtractorLinkType.DASH ||
                 (link.type == ExtractorLinkType.M3U8 && getApiFromNameNull(ep.sourceApiName)?.getVideoInterceptor(link) != null)) {
                 return AdaptiveDownload.download(context, link, ep.sourceApiName, name, folder ?: "", ep.id, callback)
