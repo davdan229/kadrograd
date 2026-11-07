@@ -59,11 +59,12 @@ def apply(root):
     text = replace_once(text, "versionCode = libs.versions.versionCode.get().toInt()", f'versionCode = {CONFIG["versionCode"]}')
     text = replace_once(text, "versionName = libs.versions.versionName.get()", f'versionName = "{CONFIG["versionName"]}"')
     text = replace_once(text, "implementation(libs.bundles.media3)", 'implementation(libs.bundles.media3)\n    implementation("androidx.media3:media3-transformer:1.9.3")')
-    text = replace_once(text, "dependencies {\n    // Testing", """// The test APK shares j$ class names with the target app. Its L8 output must retain
-// the APIs used by the target as well as those referenced directly by the tests.
-tasks.withType<com.android.build.gradle.internal.tasks.L8DexDesugarLibTask>().configureEach {
-    if (name.endsWith("AndroidTest")) {
-        keepRulesConfigurations.add("-keep class * { *; }")
+    text = replace_once(text, "dependencies {\n    // Testing", """// Instrumentation and the app share j$ classes. Configure L8 after AGP's task
+// creation actions so that both APKs retain the same public compatibility APIs.
+afterEvaluate {
+    tasks.withType<com.android.build.gradle.internal.tasks.L8DexDesugarLibTask>().configureEach {
+        keepRulesConfigurations.set(listOf("-dontobfuscate", "-dontoptimize", "-keep class * { *; }"))
+        debuggable.set(false)
     }
 }
 
