@@ -104,7 +104,7 @@ class KadrogradHomeTest {
 
     private suspend fun renderZonaUhd(instrumentation: Instrumentation) {
         val api = requireNotNull(getApiFromNameNull("Кадроград · Zona"))
-        val shelf = api.getMainPage(1, MainPageRequest("Фильмы в 4K", "verified-4k", false))
+        val shelf = requireNotNull(api.getMainPage(1, MainPageRequest("Фильмы в 4K", "verified-4k", false)))
         val card = shelf.items.flatMap { it.list }.single { it.url.endsWith("/movies/slezy-stali") }
         check(card.quality == SearchQuality.FourK) { "Card has no verified 4K badge" }
         val movie = api.load(card.url) as MovieLoadResponse
