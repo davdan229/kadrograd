@@ -63,7 +63,7 @@ def apply(root):
 // the APIs used by the target as well as those referenced directly by the tests.
 tasks.withType<com.android.build.gradle.internal.tasks.L8DexDesugarLibTask>().configureEach {
     if (name.endsWith("AndroidTest")) {
-        keepRulesConfigurations.add("-keep class j$.** { *; }")
+        keepRulesConfigurations.add("-keep class * { *; }")
     }
 }
 
@@ -159,7 +159,7 @@ dependencies {
     for path in (root / "app/src/main/res").glob("values*/strings.xml"):
         text = path.read_text(encoding="utf-8")
         import re
-        label = "Кадроград" if path.parent.name == "values-ru" else "Kadrograd"
+        label = "CloudStream"
         text = re.sub(r'(<string name="app_name">)[^<]*(</string>)', rf'\g<1>{label}\g<2>', text)
         picker = "Выбрать качество и озвучку" if path.parent.name == "values-ru" else "Choose quality and voice"
         text = re.sub(r'(<string name="episode_action_download_mirror">)[^<]*(</string>)', rf'\g<1>{picker}\g<2>', text)
