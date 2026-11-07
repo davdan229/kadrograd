@@ -4,7 +4,7 @@
 
 **Версия 1.1.0** · [Скачать пакет .cs3](https://raw.githubusercontent.com/davdan229/kadrograd/builds/packages/Kadrograd-b2430e2d512a917a0e592f8ddb339ae9a5387dd2390d033d1d4705a15b9f09a3.cs3) · [Сборки GitHub Actions](https://github.com/davdan229/kadrograd/actions/workflows/build.yml)
 
-[CloudStream с загрузчиком Кадрограда — APK 1.0.0-beta.1](https://github.com/davdan229/kadrograd/releases/tag/client-v1.0.0-beta.1). Сборка на основе CloudStream 4.8.0 устанавливается рядом с официальной и позволяет выбирать качество и озвучку перед скачиванием Zona. Для сохранения VP9/Opus требуется Android 10 или новее. После паузы адаптивная загрузка начинается заново. [Исходники и сборка клиента](client/).
+[CloudStream с загрузчиком Кадрограда — APK 1.0.0-beta.2](https://github.com/davdan229/kadrograd/releases/tag/client-v1.0.0-beta.2). Сборка на основе CloudStream 4.8.0 устанавливается рядом с официальной и позволяет выбирать качество и озвучку перед скачиванием Zona. Для сохранения VP9/Opus требуется Android 10 или новее. Пауза сохраняет текущую загрузку; продолжение после закрытия приложения ещё не поддерживается. [Исходники и сборка клиента](client/).
 
 Публичные версии имеют формат `1.0.0`. Исправления получают следующий номер `1.0.1`, новые возможности — `1.1.0`, несовместимые изменения — `2.0.0`. В списке расширений Cloudstream дополнительно показывает целочисленный номер сборки, который нужен для автоматического обновления.
 
@@ -51,7 +51,7 @@
 
 Результаты автоматических тестов и проверки пакета доступны в [GitHub Actions](https://github.com/davdan229/kadrograd/actions/workflows/build.yml).
 
-[Android-проверка выпуска](https://github.com/davdan229/kadrograd/actions/runs/42335168405) подтвердила верхнюю карусель и кнопку просмотра у трёх источников, начало воспроизведения 4K и четыре сценария загрузчика на эмуляторе Android 11. HTTP-проверки охватывают поиск с опечатками, карточки, изображения и образцы видеопотоков. Регулярный [контроль каталогов](https://github.com/davdan229/kadrograd/actions/workflows/catalog-health.yml) различает сетевые ошибки, ограничения и отсутствие ожидаемых данных. [Индекс UHD](https://github.com/davdan229/kadrograd/actions/workflows/uhd-catalog.yml) обновляется каждые шесть часов.
+[Android-проверка выпуска](https://github.com/davdan229/kadrograd/actions/runs/42336638358) подтвердила верхнюю карусель и кнопку просмотра у трёх источников, начало воспроизведения 4K, шесть сценариев загрузчика и обновление APK с сохранением данных на эмуляторе Android 11. HTTP-проверки охватывают поиск с опечатками, карточки, изображения и образцы видеопотоков. Регулярный [контроль каталогов](https://github.com/davdan229/kadrograd/actions/workflows/catalog-health.yml) различает сетевые ошибки, ограничения и отсутствие ожидаемых данных. [Индекс UHD](https://github.com/davdan229/kadrograd/actions/workflows/uhd-catalog.yml) обновляется каждые шесть часов.
 
 Если возникла проблема, укажите в [Issues](https://github.com/davdan229/kadrograd/issues) версию расширения и Cloudstream, источник, название, сезон и серию, точную ошибку и используете ли VPN. Пароли, cookies и подписанные видеоссылки не нужны.
 
