@@ -15,12 +15,17 @@ import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.navigation.fragment.NavHostFragment
 import androidx.preference.PreferenceManager
 import androidx.test.core.app.ActivityScenario
+import androidx.test.espresso.Espresso.onData
+import androidx.test.espresso.action.ViewActions.click
 import androidx.test.platform.app.InstrumentationRegistry
 import com.lagradost.cloudstream3.APIHolder.getApiFromNameNull
 import com.lagradost.cloudstream3.mvvm.Resource
 import com.lagradost.cloudstream3.plugins.PluginManager
 import com.lagradost.cloudstream3.plugins.RepositoryManager
+import com.lagradost.cloudstream3.plugins.BundledSources
+import com.lagradost.cloudstream3.ui.home.HomeFragment.Companion.selectHomepage
 import com.lagradost.cloudstream3.ui.home.HomeViewModel
+import com.lagradost.cloudstream3.utils.DataStoreHelper
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
@@ -29,9 +34,39 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Assert.*
 import org.junit.Test
+import org.hamcrest.Matchers.allOf
+import org.hamcrest.Matchers.containsString
+import org.hamcrest.Matchers.instanceOf
 import java.io.File
 
 class KadrogradHomeTest {
+    @Test fun sourcePickerListsAllBundledSourcesAndKeepsLaterFilterChanges() = runBlocking<Unit> {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        context.getSharedPreferences("rebuild_preference", 0).edit().putString("HAS_DONE_SETUP", "true").commit()
+        val settings = context.getSharedPreferences("kadrograd_client", 0)
+        val previousTypes = DataStoreHelper.homePreference
+        DataStoreHelper.homePreference = listOf(TvType.Movie, TvType.TvSeries)
+        settings.edit().remove("home_types_migrated").commit()
+        try {
+            BundledSources.prepare(context, PluginManager.getPluginsOnline())
+            assertTrue(DataStoreHelper.homePreference.contains(TvType.Anime))
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                withTimeout(60_000) {
+                    while (getApiFromNameNull("Кадроград · AnimeVost") == null) delay(100)
+                }
+                for (name in listOf("Кадроград · AnimeVost", "Кадроград · AniLibria", "Кадроград · Zona")) {
+                    val selected = CompletableDeferred<String>()
+                    scenario.onActivity { it.selectHomepage(null) { picked -> selected.complete(picked) } }
+                    onData(allOf(instanceOf(String::class.java), containsString(name))).perform(click())
+                    assertEquals(name, withTimeout(5_000) { selected.await() })
+                }
+                DataStoreHelper.homePreference = listOf(TvType.Movie)
+                BundledSources.prepare(context, PluginManager.getPluginsOnline())
+                assertEquals(listOf(TvType.Movie), DataStoreHelper.homePreference)
+            }
+        } finally { DataStoreHelper.homePreference = previousTypes }
+    }
+
     @Test fun allBundledSourcesHaveAVisibleHeroAndPlayButton() = runBlocking {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext

@@ -1,6 +1,8 @@
 package com.lagradost.cloudstream3.plugins
 
 import android.content.Context
+import com.lagradost.cloudstream3.TvType
+import com.lagradost.cloudstream3.utils.DataStoreHelper
 import kotlinx.coroutines.sync.Mutex
 import org.json.JSONObject
 import java.io.File
@@ -20,6 +22,13 @@ internal object BundledSources {
     }
 
     fun prepare(context: Context, installed: Array<PluginData>): PluginData? {
+        val settings = preferences(context)
+        if (!settings.getBoolean("home_types_migrated", false)) {
+            if (DataStoreHelper.homePreference.toSet() == setOf(TvType.Movie, TvType.TvSeries)) {
+                DataStoreHelper.homePreference = TvType.values().filter { it != TvType.NSFW }
+            }
+            settings.edit().putBoolean("home_types_migrated", true).apply()
+        }
         if (preferences(context).getBoolean(seeded, false)) return null
         val target = PluginManager.getPluginPath(context, internalName, repositoryUrl)
         if (installed.any { it.filePath == target.absolutePath && target.isFile }) {

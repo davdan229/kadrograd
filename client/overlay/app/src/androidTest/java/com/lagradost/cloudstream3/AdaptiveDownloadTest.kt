@@ -2,10 +2,21 @@ package com.lagradost.cloudstream3
 
 import android.media.MediaExtractor
 import android.media.MediaFormat
+import android.view.View
+import androidx.test.core.app.ActivityScenario
+import androidx.test.espresso.Espresso.onData
+import androidx.test.espresso.Espresso.onView
+import androidx.test.espresso.action.ViewActions.click
+import androidx.test.espresso.assertion.ViewAssertions.matches
+import androidx.test.espresso.matcher.ViewMatchers.isDisplayed
+import androidx.test.espresso.matcher.ViewMatchers.withId
 import androidx.preference.PreferenceManager
 import androidx.test.platform.app.InstrumentationRegistry
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.AppContextUtils.loadResult
+import com.lagradost.cloudstream3.plugins.PluginManager
+import com.lagradost.cloudstream3.services.DownloadQueueService
 import com.lagradost.cloudstream3.utils.downloader.AdaptiveDownload
 import com.lagradost.cloudstream3.utils.downloader.DownloadObjects
 import com.lagradost.cloudstream3.utils.downloader.VideoDownloadManager
@@ -21,6 +32,9 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.*
 import org.junit.Test
+import org.hamcrest.Matchers.allOf
+import org.hamcrest.Matchers.containsString
+import org.hamcrest.Matchers.instanceOf
 import java.io.File
 import java.net.ServerSocket
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -112,6 +126,95 @@ class AdaptiveDownloadTest {
             assertEquals(expectedAudio, formats.single { it.getString(MediaFormat.KEY_MIME)!!.startsWith("audio/") }.getString(MediaFormat.KEY_MIME))
             assertTrue(video.getLong(MediaFormat.KEY_DURATION) >= 1_000_000L)
         } finally { extractor.release() }
+    }
+
+    @Test fun movieButtonOffersQualityAndVoiceAndSurvivesActivityRecreationDuringDownload() = runBlocking<Unit> {
+        val waiting = CountDownLatch(1)
+        val releaseBody = CountDownLatch(1)
+        val delayed = AtomicBoolean(false)
+        FixtureServer { path ->
+            if (path.contains("/chunk-1-") && delayed.compareAndSet(false, true)) {
+                waiting.countDown()
+                check(releaseBody.await(30, TimeUnit.SECONDS))
+            }
+        }.use { server ->
+            val preferences = PreferenceManager.getDefaultSharedPreferences(context)
+            val pathKey = context.getString(R.string.download_path_key)
+            val previous = preferences.getString(pathKey, null)
+            val directory = File(context.getExternalFilesDir(null), "adaptive-ui-${System.nanoTime()}").apply { mkdirs() }
+            preferences.edit().putString(pathKey, directory.absolutePath).putInt("app_layout_key", 0).commit()
+            context.getSharedPreferences("rebuild_preference", 0).edit().putString("HAS_DONE_SETUP", "true").commit()
+            val provider = object : MainAPI() {
+                override var name = "Movie download fixture"
+                override var mainUrl = server.origin
+                override val hasDownloadSupport = true
+                override val supportedTypes = setOf(TvType.Movie)
+                override suspend fun load(url: String): LoadResponse =
+                    newMovieLoadResponse("Download fixture", url, TvType.Movie, "fixture-data")
+                override fun getVideoInterceptor(extractorLink: com.lagradost.cloudstream3.utils.ExtractorLink) =
+                    selection(extractorLink.quality, if (extractorLink.name.contains("Studio B")) 4 else 3)
+                override suspend fun loadLinks(data: String, isCasting: Boolean,
+                    subtitleCallback: (SubtitleFile) -> Unit,
+                    callback: (com.lagradost.cloudstream3.utils.ExtractorLink) -> Unit): Boolean {
+                    for (height in listOf(480, 1080, 2160)) for (voice in listOf("Studio A", "Studio B")) {
+                        callback(newExtractorLink(name, "$voice · $height", "${server.origin}/dash/manifest.mpd#$height-$voice", ExtractorLinkType.DASH) {
+                            quality = height
+                        })
+                    }
+                    return true
+                }
+            }
+            var downloadId: Int? = null
+            try {
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    withTimeout(30_000) {
+                        while (!PluginManager.loadedOnlinePlugins || !PluginManager.loadedLocalPlugins) delay(100)
+                    }
+                    APIHolder.addPluginMapping(provider)
+                    scenario.onActivity { it.loadResult("${server.origin}/movie", provider.name, "Download fixture") }
+                    withTimeout(20_000) {
+                        while (true) {
+                            var ready = false
+                            scenario.onActivity { ready = it.findViewById<View>(R.id.download_movie_button)?.let { view -> view.isShown && view.isEnabled } == true }
+                            if (ready) break
+                            delay(100)
+                        }
+                    }
+                    onView(withId(R.id.download_movie_button)).perform(click())
+                    // The movie button must show all choices before anything is queued.
+                    for (height in listOf(480, 1080, 2160)) for (voice in listOf("Studio A", "Studio B")) {
+                        onData(allOf(instanceOf(String::class.java), containsString("$voice · $height")))
+                            .check(matches(isDisplayed()))
+                    }
+                    assertTrue(VideoDownloadManager.currentDownloads.value.isEmpty())
+                    onData(allOf(instanceOf(String::class.java), containsString("Studio B · 1080"))).perform(click())
+                    withContext(Dispatchers.IO) { assertTrue("Queue service did not request video", waiting.await(20, TimeUnit.SECONDS)) }
+                    downloadId = VideoDownloadManager.currentDownloads.value.single()
+                    assertTrue(DownloadQueueService.isRunning)
+                    scenario.recreate()
+                    scenario.onActivity { assertFalse(it.isFinishing) }
+                    delay(2_000)
+                    releaseBody.countDown()
+                    withTimeout(60_000) {
+                        while (VideoDownloadManager.downloadStatus[downloadId] != VideoDownloadManager.DownloadType.IsDone) delay(100)
+                    }
+                    val file = directory.walkTopDown().single { it.isFile }
+                    assertTracks(file, 1920, 1080)
+                    scenario.onActivity { assertFalse(it.isFinishing) }
+                }
+            } finally {
+                releaseBody.countDown()
+                downloadId?.let { id ->
+                    withContext(Dispatchers.Main.immediate) {
+                        VideoDownloadManager.downloadEvent(id to VideoDownloadManager.DownloadActionType.Stop)
+                    }
+                    CloudStreamApp.removeKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString())
+                }
+                APIHolder.removePluginMapping(provider)
+                preferences.edit().apply { if (previous == null) remove(pathKey) else putString(pathKey, previous) }.commit()
+                directory.deleteRecursively()
+            }
+        }
     }
 
     @Test fun dashPreservesSdFullHdAndUhdAndSelectedOpusVoice() = runBlocking {

@@ -107,7 +107,11 @@ dependencies {
         text = text.replace(before, after)
     changes[path] = text
     path = BASE + "ui/result/ResultFragmentPhone.kt"
-    changes[path] = replace_once(changes[path], "requirePathForActions(listOf(ACTION_DOWNLOAD_EPISODE to ep))", "requirePathForActions(listOf(ACTION_DOWNLOAD_MIRROR to ep))")
+    changes[path] = replace_once(changes[path], """                            DOWNLOAD_ACTION_DOWNLOAD -> {
+                                requirePathForActions(listOf(ACTION_DOWNLOAD_EPISODE to ep))
+                            }""", """                            DOWNLOAD_ACTION_DOWNLOAD -> {
+                                requirePathForActions(listOf(ACTION_DOWNLOAD_MIRROR to ep))
+                            }""")
 
     path = BASE + "ui/result/ResultViewModel2.kt"
     text = replace_once(changes[path], "        isCasting: Boolean = false,\n        callback: (Pair<LinkLoadingResult, Int>) -> Unit",

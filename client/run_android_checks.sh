@@ -2,6 +2,8 @@
 set -euo pipefail
 checkout=$(realpath "${1:?CloudStream checkout is required}")
 results="$checkout/android-checks"
+android_api="${KADROGRAD_ANDROID_API:-35}"
+case "$android_api" in 30|35|36) ;; *) echo 'Unsupported Android API'; exit 1 ;; esac
 mkdir -p "$results"
 cleanup() {
   adb logcat -d > "$results/logcat.txt" 2>&1 || true
@@ -9,13 +11,13 @@ cleanup() {
 }
 trap cleanup EXIT
 sudo chmod 666 /dev/kvm
-sdkmanager 'emulator' 'system-images;android-30;default;x86_64' > "$results/sdk.txt"
+sdkmanager 'emulator' "system-images;android-$android_api;default;x86_64" > "$results/sdk.txt"
 export ANDROID_USER_HOME="$RUNNER_TEMP/kadrograd-android"
 export ANDROID_AVD_HOME="$ANDROID_USER_HOME/avd"
 mkdir -p "$ANDROID_AVD_HOME"
-echo no | avdmanager create avd --force --name kadrograd-checks --path "$ANDROID_AVD_HOME/kadrograd-checks.avd" --package 'system-images;android-30;default;x86_64' > "$results/avd.txt"
+echo no | avdmanager create avd --force --name kadrograd-checks --path "$ANDROID_AVD_HOME/kadrograd-checks.avd" --package "system-images;android-$android_api;default;x86_64" > "$results/avd.txt"
 test -f "$ANDROID_AVD_HOME/kadrograd-checks.avd/config.ini"
-printf 'avd.ini.encoding=UTF-8\npath=%s\ntarget=android-30\n' "$ANDROID_AVD_HOME/kadrograd-checks.avd" > "$ANDROID_AVD_HOME/kadrograd-checks.ini"
+printf 'avd.ini.encoding=UTF-8\npath=%s\ntarget=android-%s\n' "$ANDROID_AVD_HOME/kadrograd-checks.avd" "$android_api" > "$ANDROID_AVD_HOME/kadrograd-checks.ini"
 "$ANDROID_HOME/emulator/emulator" -list-avds | tee "$results/avds.txt" | grep -qx kadrograd-checks
 "$ANDROID_HOME/emulator/emulator" -avd kadrograd-checks -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -accel on -memory 2048 -cores 2 > "$results/emulator.txt" 2>&1 &
 emulator_pid=$!
@@ -49,7 +51,7 @@ if [ -n "${KADROGRAD_UPGRADE_FROM:-}" ]; then
   grep -q 'OK (1 test)' "$results/upgrade-after.txt" || status=1
 fi
 adb shell am instrument -w -r -e class com.lagradost.cloudstream3.AdaptiveDownloadTest ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/instrumentation.txt" || status=1
-grep -q 'OK (6 tests)' "$results/instrumentation.txt" || status=1
+grep -q 'OK (7 tests)' "$results/instrumentation.txt" || status=1
 if grep -q 'FAILURES!!!' "$results/instrumentation.txt"; then status=1; fi
 adb shell am instrument -w -r -e class com.lagradost.cloudstream3.KadrogradHomeTest ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/home-instrumentation.txt" || status=1
 if ! adb pull /sdcard/Android/data/ru.kadrograd.cloudstream/files/android-checks "$results/"; then
@@ -57,6 +59,6 @@ if ! adb pull /sdcard/Android/data/ru.kadrograd.cloudstream/files/android-checks
     adb pull /sdcard/Android/data/ru.kadrograd.cloudstream/files/android-checks "$results/" || true
   fi
 fi
-grep -q 'OK (1 test)' "$results/home-instrumentation.txt" || status=1
+grep -q 'OK (2 tests)' "$results/home-instrumentation.txt" || status=1
 if grep -q 'FAILURES!!!' "$results/home-instrumentation.txt"; then status=1; fi
 exit "$status"
