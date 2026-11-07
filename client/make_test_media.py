@@ -22,7 +22,7 @@ def generate(root):
         "-map", "[v4]", "-map", "[vhd]", "-map", "[vsd]", "-map", "1:a", "-map", "2:a",
         "-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "8", "-crf", "40", "-b:v", "0", "-threads", "2",
         "-c:a", "libopus", "-b:a", "64k", "-f", "dash", "-seg_duration", "1",
-        "-use_template", "1", "-use_timeline", "1", "-adaptation_sets", "id=0,streams=v id=1,streams=3 id=2,streams=4",
+        "-use_template", "1", "-use_timeline", "1", "-adaptation_sets", "id=0,streams=0 id=1,streams=1 id=2,streams=2 id=3,streams=3 id=4,streams=4",
         "-init_seg_name", "init-$RepresentationID$.webm", "-media_seg_name", "chunk-$RepresentationID$-$Number%05d$.webm", "manifest.mpd",
     ], dash)
     ffmpeg(["-f", "lavfi", "-i", "color=c=navy:s=1920x1080:r=2:d=2", "-an", "-c:v", "libx264", "-preset", "ultrafast",
