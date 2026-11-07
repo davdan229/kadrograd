@@ -2,7 +2,7 @@
 
 Русскоязычное расширение для **Cloudstream на Android**. Ищет фильмы, сериалы, мультфильмы и аниме в подключённых каталогах. Год выпуска не ограничен. Видео воспроизводится с серверов источников.
 
-**Версия 1.0.1** · [Скачать пакет .cs3](https://raw.githubusercontent.com/davdan229/kadrograd/builds/packages/Kadrograd-85ae032b9782534f25e01d6f15ab412a5efb4ef718889e5842fc9ce3c1ec94c5.cs3) · [Сборки GitHub Actions](https://github.com/davdan229/kadrograd/actions/workflows/build.yml)
+**Версия 1.0.2** · [Скачать пакет .cs3](https://raw.githubusercontent.com/davdan229/kadrograd/builds/packages/Kadrograd-6f73a2d13207708eacccac9680628b7e7b73f5b346685f61bf477a1db2aafab1.cs3) · [Сборки GitHub Actions](https://github.com/davdan229/kadrograd/actions/workflows/build.yml)
 
 Публичные версии имеют формат `1.0.0`. Исправления получают следующий номер `1.0.1`, новые возможности — `1.1.0`, несовместимые изменения — `2.0.0`. В списке расширений Cloudstream дополнительно показывает целочисленный номер сборки, который нужен для автоматического обновления.
 
