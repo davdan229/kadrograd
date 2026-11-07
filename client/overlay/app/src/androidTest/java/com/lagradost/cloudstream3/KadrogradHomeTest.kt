@@ -13,6 +13,7 @@ import com.lagradost.cloudstream3.ui.home.HomeViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Assert.*
 import org.junit.Test
 import java.io.File
@@ -41,9 +42,10 @@ class KadrogradHomeTest {
             assertEquals(PluginManager.getPluginPath(context, "Kadrograd", repo).absolutePath, plugin.filePath)
             assertTrue(File(plugin.filePath).isFile)
             assertTrue(getApiFromNameNull("Кадроград · Zona")!!.hasDownloadSupport)
+            val failures = mutableListOf<String>()
             for ((key, name) in listOf("vost" to "Кадроград · AnimeVost", "libria" to "Кадроград · AniLibria", "zona" to "Кадроград · Zona")) {
                 model.loadAndCancel(name, forceReload = true, fromUI = true)
-                withTimeout(100_000) {
+                val ready = withTimeoutOrNull(65_000) {
                     while (true) {
                         var ready = false
                         scenario.onActivity {
@@ -54,19 +56,25 @@ class KadrogradHomeTest {
                         if (ready) break
                         delay(500)
                     }
+                    true
                 }
-                delay(3_000)
-                scenario.onActivity { activity ->
-                    val pager = activity.findViewById<View>(R.id.home_preview_viewpager)
-                    val play = activity.findViewById<View>(R.id.home_preview_play)
-                    assertTrue("$name: hero missing", pager != null && pager.isShown && pager.height > 0)
-                    assertTrue("$name: play button missing", play != null && play.isShown)
+                if (ready != true) {
+                    failures.add("$name: no preview; page=${model.page.value?.javaClass?.simpleName}, preview=${model.preview.value?.javaClass?.simpleName}")
+                } else {
+                    delay(3_000)
+                    scenario.onActivity { activity ->
+                        val pager = activity.findViewById<View>(R.id.home_preview_viewpager)
+                        val play = activity.findViewById<View>(R.id.home_preview_play)
+                        if (pager == null || !pager.isShown || pager.height <= 0) failures.add("$name: hero missing")
+                        if (play == null || !play.isShown) failures.add("$name: play button missing")
+                    }
                 }
                 instrumentation.uiAutomation.takeScreenshot().let { bitmap ->
                     File(directory, "home-$key.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
                     bitmap.recycle()
                 }
             }
+            assertTrue(failures.joinToString("\n"), failures.isEmpty())
         }
     }
 }

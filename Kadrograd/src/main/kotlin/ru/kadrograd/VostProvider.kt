@@ -40,6 +40,9 @@ class VostProvider(baseUrl: String) : QualityProvider() {
     private val pagePaths = java.util.Collections.synchronizedMap(object : LinkedHashMap<Int,String>(64,0.75f,true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int,String>) = size > 256
     })
+    private val apiRows = java.util.Collections.synchronizedMap(object : LinkedHashMap<Int,Pair<Long,JsonNode>>(64,0.75f,true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int,Pair<Long,JsonNode>>) = size > 256
+    })
     // The mobile site uses a different template. Request the desktop markup consistently, including search.
     private val browserHeaders = mapOf("User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         "Accept-Language" to "ru-RU,ru;q=0.9,en;q=0.5", "Accept" to "text/html,application/xhtml+xml,*/*;q=0.8")
@@ -77,6 +80,13 @@ class VostProvider(baseUrl: String) : QualityProvider() {
     }
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         require(page > 0 && mainPage.any { it.data == request.data })
+        if (page == 1 && request.data == "all" && catalogOrigin() != null) {
+            val official = withTimeoutOrNull(4_000) {
+                try { apiMainPage(page, request).takeIf { result -> result.items.any { it.list.isNotEmpty() } } }
+                catch (_: ErrorLoadingException) { null }
+            }
+            if (official != null) return official
+        }
         val web = withTimeoutOrNull(4_000) {
             try { webMainPage(page, request) }
             catch (_: ErrorLoadingException) { null }
@@ -84,10 +94,12 @@ class VostProvider(baseUrl: String) : QualityProvider() {
         return web ?: apiMainPage(page, request)
     }
 
+    private fun catalogOrigin() = catalogEndpoint ?: "https://api.animevost.org/v1/last".takeIf {
+        mainUrl in setOf("https://v14.vost.pw", "https://animevost.org")
+    }
+
     private suspend fun apiMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val endpoint = catalogEndpoint ?: "https://api.animevost.org/v1/last".takeIf {
-            mainUrl in setOf("https://v14.vost.pw", "https://animevost.org")
-        } ?: throw ErrorLoadingException("AnimeVost: каталог зеркала недоступен")
+        val endpoint = catalogOrigin() ?: throw ErrorLoadingException("AnimeVost: каталог зеркала недоступен")
         val node = catalogMutex.withLock {
             val cached = cachedCatalog
             if (cached != null && cached.first == page && System.currentTimeMillis() - cached.second in 0..30_000) {
@@ -121,6 +133,7 @@ class VostProvider(baseUrl: String) : QualityProvider() {
                 else -> true
             }
             if (id <= 0 || title.isBlank() || !included) return@mapNotNull null
+            if (row.path("series").isTextual) apiRows[id] = System.currentTimeMillis() to row
             newAnimeSearchResponse(title, "$mainUrl/index.php?newsid=$id", type) {
                 posterUrl = row.path("urlImagePreview").asText("").takeIf(StreamTools::isHttp)
                 year = row.path("year").asText("").toIntOrNull()
@@ -229,13 +242,24 @@ class VostProvider(baseUrl: String) : QualityProvider() {
             (if (source == "web") web() else apiRelease(source, id))
                 .takeIf { it.name.isNotBlank() && it.episodes.isNotEmpty() }
                 ?: throw ErrorLoadingException("AnimeVost: нет данных о релизе")
-        } ?: throw ErrorLoadingException("AnimeVost: релиз не найден или недоступен на проверенных адресах")
+        } ?: cachedApiRelease(id)
+            ?: throw ErrorLoadingException("AnimeVost: релиз не найден или недоступен на проверенных адресах")
+    }
+
+    private fun cachedApiRelease(id: Int): Release? {
+        val (seen, row) = apiRows[id] ?: return null
+        if (System.currentTimeMillis() - seen !in 0..300_000) return null
+        return runCatching { readApiRelease(row) }.getOrNull()?.takeIf { it.name.isNotBlank() && it.episodes.isNotEmpty() }
     }
 
     private suspend fun apiRelease(endpoint: String, id: Int): Release {
         val response = SourceHttp.post("AnimeVost", endpoint, mapOf("id" to id.toString()), timeoutSeconds = 6)
         val row = tryParseJson<JsonNode>(response.text)?.path("data")?.firstOrNull { it.path("id").asInt() == id }
             ?: throw ErrorLoadingException("AnimeVost: API не подтвердил релиз")
+        return readApiRelease(row)
+    }
+
+    private fun readApiRelease(row: JsonNode): Release {
         fun field(key: String) = row.path(key).asText("").takeIf(String::isNotBlank)
         val votes = row.path("votes").asInt()
         val average = row.path("rating").asDouble().div(votes.coerceAtLeast(1))

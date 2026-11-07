@@ -38,7 +38,9 @@ adb shell am instrument -w -r -e class com.lagradost.cloudstream3.AdaptiveDownlo
 grep -q 'OK (4 tests)' "$results/instrumentation.txt" || status=1
 if grep -q 'FAILURES!!!' "$results/instrumentation.txt"; then status=1; fi
 adb shell am instrument -w -r -e class com.lagradost.cloudstream3.KadrogradHomeTest ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/home-instrumentation.txt" || status=1
-adb pull /sdcard/Android/data/ru.kadrograd.cloudstream/files/android-checks "$results/" || true
+if ! adb pull /sdcard/Android/data/ru.kadrograd.cloudstream/files/android-checks "$results/"; then
+  adb root && timeout 20 adb wait-for-device && +    adb pull /sdcard/Android/data/ru.kadrograd.cloudstream/files/android-checks "$results/" || true
+fi
 grep -q 'OK (1 test)' "$results/home-instrumentation.txt" || status=1
 if grep -q 'FAILURES!!!' "$results/home-instrumentation.txt"; then status=1; fi
 exit "$status"

@@ -14,6 +14,7 @@ HASHES = {
     BASE + "utils/downloader/DownloadManager.kt": "46b6aae840806c01a93981800ab9e4ed3e71129c577d4cc7ea6cf58ea9de3002",
     BASE + "utils/InAppUpdater.kt": "11e1a1fbc74f820d84b08a57e74f0e168b311e6e28e8f4d235047672dfc849e7",
     BASE + "plugins/PluginManager.kt": "624f571a6cdb25fd4bc34c70e1b23ed541eb94fc34cf235d418a2e6975d6413e",
+    BASE + "ui/home/HomeViewModel.kt": "7efc2bdacb5fe34bfad05833c5a2e1d3b1362d0a0f16538ce663aa2e3d40b4bd",
     BASE + "ui/result/EpisodeAdapter.kt": "b377967f8b5663a3949836af46773cec8f83ef52c9cfb184de042c0626143f9e",
     BASE + "ui/result/ResultFragmentPhone.kt": "f6dabd385895cb88f3201f632c413d337a4d72289b7f7d28bf87d9ffbe1967a1",
     BASE + "ui/result/ResultViewModel2.kt": "9a44eb8865d9dca08302751d6a36b651181bb848f2507ecf85570a933e37f4d5",
@@ -130,6 +131,33 @@ dependencies {
     private fun acquireSingleSubtitle""")
     changes[path] = replace_once(text, "                    txt(R.string.episode_action_download_mirror)\n                ) { (result, index) ->",
         "                    txt(R.string.episode_action_download_mirror),\n                    forDownload = true\n                ) { (result, index) ->")
+
+    path = BASE + "ui/home/HomeViewModel.kt"
+    text = replace_once(changes[path], "                    val items = data.value.mapNotNull { it?.items }.flatten()",
+        """                    _page.postValue(Resource.Success(expandable))
+                    val items = data.value.mapNotNull { it?.items }.flatten()""")
+    text = replace_once(text, """                                3
+                            )
+
+                            _randomItems.postValue(randomItems)""", """                                3
+                            )
+                            if (previewResponses.isEmpty()) {
+                                kotlinx.coroutines.withTimeoutOrNull(20_000) {
+                                    repeat(2) {
+                                        if (previewResponses.isEmpty()) {
+                                            updatePreviewResponses(previewResponses, previewResponsesAdded, randomItems, 3)
+                                        }
+                                    }
+                                }
+                            }
+
+                            _randomItems.postValue(randomItems)""")
+    changes[path] = replace_once(text, """                        _preview.postValue(Resource.Success((previewResponsesAdded.size < currentShuffledList.size) to previewResponses))
+                    }
+                    _page.postValue(Resource.Success(expandable))
+                } catch (e: Exception) {""", """                        _preview.postValue(Resource.Success((previewResponsesAdded.size < currentShuffledList.size) to previewResponses))
+                    }
+                } catch (e: Exception) {""")
 
     path = BASE + "plugins/PluginManager.kt"
     changes[path] = replace_once(changes[path], """    suspend fun ___DO_NOT_CALL_FROM_A_PLUGIN_loadAllOnlinePlugins(context: Context) {
