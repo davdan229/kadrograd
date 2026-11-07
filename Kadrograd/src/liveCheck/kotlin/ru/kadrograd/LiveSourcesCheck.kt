@@ -10,6 +10,35 @@ import java.util.concurrent.TimeUnit
 
 /** Opt-in real HTTP checks: -PliveSources --tests '*LiveSourcesCheck'. No Android UI. */
 class LiveSourcesCheck {
+    @Test fun zonaReportedCardsAndTypoSearchRemainLoadable() = runBlocking {
+        val api = ZonaProvider("https://w1.zona.im")
+        for (query in listOf("Спецы", "Невский", "Ганибал")) {
+            val found = api.search(query)
+            val expected = if (query == "Ганибал") "Ганнибал" else query
+            val card = found.first { it.name.equals(expected, ignoreCase = true) && it.type == TvType.TvSeries }
+            val detail = api.load(card.url)
+            assertEquals(card.name, detail.name)
+            assertTrue((detail as TvSeriesLoadResponse).episodes.isNotEmpty())
+            assertTrue(detail.posterUrl?.let(StreamTools::isHttp) == true)
+            println("Poster origin: " + java.net.URI(detail.posterUrl!!).let { "${it.host}${it.path}" })
+            SourceHttp.get("Zona poster", detail.posterUrl!!, headers = mapOf("Range" to "bytes=0-2097151"), timeoutSeconds = 5)
+                .okhttpResponse.use { response ->
+                    assertTrue(response.isSuccessful)
+                    println("Poster HTTP ${response.code}; type=${response.header("Content-Type")}; " +
+                        "prefix=" + response.peekBody(16).bytes().joinToString("") { "%02x".format(it) })
+                    // Android's compile stubs omit ImageIO; the opt-in check runs on the JDK.
+                    val source = response.body.source()
+                    require(!source.request(2_097_153)) { "Poster exceeds the image request budget" }
+                    val imageIO = Class.forName("javax.imageio.ImageIO")
+                    val image = imageIO.getMethod("read", java.io.InputStream::class.java)
+                        .invoke(null, java.io.ByteArrayInputStream(source.readByteArray())) ?: error("Poster format is not recognized")
+                    val width = image.javaClass.getMethod("getWidth").invoke(image) as Int
+                    val height = image.javaClass.getMethod("getHeight").invoke(image) as Int
+                    assertTrue("Poster is too small: ${width}x$height", width >= 300 && height >= 400)
+                    println("Zona reported card: metadata, episodes and ${width}x$height poster verified")
+                }
+        }
+    }
     @Test fun animeVostPublicApiKeepsCatalogSearchAndDetailsWhenWebIsUnavailable() = runBlocking {
         val api = VostProvider("http://127.0.0.1:9").apply {
             catalogEndpoint = "https://api.animevost.org/v1/last"
