@@ -8,8 +8,8 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DownloadChoicesTest {
-    private suspend fun link(label: String, resolution: Int, vararg voices: String) =
-        newExtractorLink("Fixture", label, "https://cdn.example/$label.mpd", ExtractorLinkType.DASH) {
+    private suspend fun link(label: String, resolution: Int, vararg voices: String, stream: String = "main") =
+        newExtractorLink("Fixture", label, "https://cdn.example/$stream.mpd#$label", ExtractorLinkType.DASH) {
             quality = resolution
             extractorData = org.json.JSONObject().put("kind", "zona-dash-v1").put("width", 1920).put("height", resolution)
                 .put("voices", org.json.JSONObject(voices.mapIndexed { index, name -> "$index" to name }.toMap())).toString()
@@ -33,5 +33,12 @@ class DownloadChoicesTest {
     @Test fun unrelatedProvidersArePreserved() = runBlocking {
         val direct = newExtractorLink("Other", "Original", "https://cdn.example/file.mp4", ExtractorLinkType.VIDEO)
         assertEquals(listOf(direct), DownloadChoices.select(listOf(direct)))
+    }
+    @Test fun anotherStreamKeepsItsOwnAudioChoicesAtTheSameResolution() = runBlocking {
+        val mainA = link("main-a", 1080, "Студия А")
+        val mainB = link("main-b", 1080, "Студия Б")
+        val alternate = link("alternate", 1080, "Студия А", "Студия Б", stream = "alternate")
+        val alternateA = link("alternate-a", 1080, "Студия А", stream = "alternate")
+        assertEquals(listOf(mainA, mainB, alternate, alternateA), DownloadChoices.select(listOf(mainA, mainB, alternate, alternateA)))
     }
 }

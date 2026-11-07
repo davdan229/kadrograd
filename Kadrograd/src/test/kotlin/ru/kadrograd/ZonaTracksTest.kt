@@ -43,6 +43,15 @@ class ZonaTracksTest {
         val choices = ZonaTracks.voiceChoices(listOf(source),allQualities=true)
         assertEquals(listOf("Студия А" to 2160, "Студия А" to 1080, "Студия Б" to 720, "Студия Б" to 480),
             choices.map { it.name to it.variant.playbackQuality })
+        val alternate = source.copy(
+            url = "https://video.cdn.example/main.m3u8",
+            context = context().copy(kind = "zona-hls-v1", voices = mapOf("a" to "Студия А")),
+            variants = listOf(fhd),
+            voiceVariants = emptyMap(),
+        )
+        val fullHd = ZonaTracks.voiceChoices(listOf(source, alternate), allQualities = true)
+            .filter { it.variant == fhd && it.name == "Студия А" }
+        assertEquals(setOf(source.url, alternate.url), fullHd.map { it.found.url }.toSet())
     }
     private val epoch = 1_790_000_000L
     private fun context(media: String = "https://video.cdn.example/film/master.mpd?token=test") =

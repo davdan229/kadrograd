@@ -85,7 +85,11 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
                     selected.map { VoiceChoice(found,it,id,name) }
                 }
             }.sortedWith(compareByDescending<VoiceChoice> { it.variant.playbackQuality }.thenByDescending { it.variant.height })
-                .distinctBy { it.name.trim().lowercase(java.util.Locale.ROOT) to if (allQualities) it.variant.playbackQuality else 0 }
+                .let { choices ->
+                    fun label(choice: VoiceChoice) = choice.name.trim().lowercase(java.util.Locale.ROOT)
+                    if (allQualities) choices.distinctBy { Triple(it.found.url, it.variant, label(it)) }
+                    else choices.distinctBy(::label)
+                }
 
         fun context(link: ExtractorLink): Context? = tryParseJson<Context>(link.extractorData)?.takeIf { it.valid() }
         fun interceptor(context: Context): Interceptor = Interceptor { chain ->
