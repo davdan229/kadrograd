@@ -125,6 +125,9 @@ jobs:
           python3 client/verify_apk.py "$apk"
       - name: Verify adaptive downloads on Android
         timeout-minutes: 12
+        env:
+          KADROGRAD_UPGRADE_FROM: https://github.com/davdan229/kadrograd/releases/download/client-v1.0.0-beta.1/CloudStream-Kadrograd-1.0.0-beta.1.apk
+          KADROGRAD_UPGRADE_SHA256: da84158d04f396afb3c6765137fdf0ee7a4c81f1b542d4f30cf393e9765a3a09
         run: bash client/run_android_checks.sh .client-work/upstream
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()

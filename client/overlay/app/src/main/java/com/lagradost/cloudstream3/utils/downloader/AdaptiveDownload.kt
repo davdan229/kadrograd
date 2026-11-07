@@ -7,6 +7,8 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.Clock
 import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.transformer.Codec
@@ -37,12 +39,53 @@ import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import java.io.File
 import java.io.IOException
+import java.io.InterruptedIOException
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.coroutineContext
 
 /** Copies clear adaptive streams, preserving compressed audio and video samples. */
 object AdaptiveDownload {
     @JvmStatic fun isSupported(): Boolean = true
+
+    private class TransferGate {
+        private val monitor = Object()
+        @Volatile var paused = false
+            private set
+        private var cancelled = false
+
+        fun pause(value: Boolean) = synchronized(monitor) {
+            paused = value
+            if (!value) monitor.notifyAll()
+        }
+
+        fun cancel() = synchronized(monitor) {
+            cancelled = true
+            monitor.notifyAll()
+        }
+
+        fun awaitReady() = synchronized(monitor) {
+            try {
+                while (paused && !cancelled) monitor.wait()
+            } catch (interrupted: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw InterruptedIOException("Adaptive download interrupted").apply { initCause(interrupted) }
+            }
+            if (cancelled || Thread.currentThread().isInterrupted) throw InterruptedIOException("Adaptive download cancelled")
+        }
+    }
+
+    private class PausableDataSource(private val upstream: DataSource, private val gate: TransferGate) : DataSource by upstream {
+        override fun open(dataSpec: DataSpec): Long {
+            gate.awaitReady()
+            return upstream.open(dataSpec)
+        }
+
+        override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+            if (length == 0) return 0
+            gate.awaitReady()
+            return upstream.read(buffer, offset, length)
+        }
+    }
 
     // Downloads must never silently re-encode or reduce the selected resolution.
     private val copyOnlyEncoder = object : Codec.EncoderFactory {
@@ -58,6 +101,7 @@ object AdaptiveDownload {
         output: File,
         interceptor: Interceptor?,
         keepRunning: () -> Boolean = { true },
+        isPaused: () -> Boolean = { false },
         progress: (Int) -> Unit = {},
         container: (String) -> Unit = {},
     ): Boolean = withContext(Dispatchers.Main.immediate) {
@@ -71,8 +115,10 @@ object AdaptiveDownload {
             if (link.referer.isNotBlank()) put("Referer", link.referer)
             putAll(link.headers)
         }
-        val dataSource = DefaultDataSource.Factory(context,
+        val upstream = DefaultDataSource.Factory(context,
             OkHttpDataSource.Factory(client).setDefaultRequestProperties(headers))
+        val gate = TransferGate().apply { pause(isPaused()) }
+        val dataSource = DataSource.Factory { PausableDataSource(upstream.createDataSource(), gate) }
         val mediaSource = DefaultMediaSourceFactory(dataSource)
         val loader = ExoPlayerAssetLoader.Factory(context, DefaultDecoderFactory.Builder(context).build(), Clock.DEFAULT, mediaSource)
         val finished = CompletableDeferred<Unit>()
@@ -100,7 +146,8 @@ object AdaptiveDownload {
             while (!finished.isCompleted) {
                 coroutineContext.ensureActive()
                 if (!keepRunning()) return@withContext false
-                if (transformer.getProgress(holder) == Transformer.PROGRESS_STATE_AVAILABLE && holder.progress != lastProgress) {
+                gate.pause(isPaused())
+                if (!gate.paused && transformer.getProgress(holder) == Transformer.PROGRESS_STATE_AVAILABLE && holder.progress != lastProgress) {
                     lastProgress = holder.progress
                     progress(holder.progress.coerceIn(0, 99))
                 }
@@ -110,6 +157,7 @@ object AdaptiveDownload {
             require(output.length() > 0) { "Empty downloaded file" }
             true
         } finally {
+            gate.cancel()
             try { transformer.cancel() }
             finally {
                 client.dispatcher.cancelAll()
@@ -134,21 +182,18 @@ object AdaptiveDownload {
             metadata.type = DownloadType.IsDownloading
             val interceptor = getApiFromNameNull(apiName)?.getVideoInterceptor(link)
                 ?: getApiFromNameNull(link.source)?.getVideoInterceptor(link)
-            while (true) {
-                while (metadata.type == DownloadType.IsPaused) delay(200)
-                if (metadata.type == DownloadType.IsStopped) return@withContext DownloadStatus(false, false, true)
-                output.delete()
-                metadata.setResumeLength(0)
-                metadata.hlsProgress = 0
-                val exported = exportToFile(context, link, output, interceptor,
-                    keepRunning = { metadata.type == DownloadType.IsDownloading },
-                    progress = { value ->
-                        metadata.bytesDownloaded = output.length()
-                        metadata.hlsProgress = value * 98 / 100
-                        metadata.type = metadata.type
-                    }, container = { extension = it })
-                if (exported) break
-            }
+            output.delete()
+            metadata.setResumeLength(0)
+            metadata.hlsProgress = 0
+            val exported = exportToFile(context, link, output, interceptor,
+                keepRunning = { metadata.type != DownloadType.IsStopped },
+                isPaused = { metadata.type == DownloadType.IsPaused },
+                progress = { value ->
+                    metadata.bytesDownloaded = output.length()
+                    metadata.hlsProgress = value * 98 / 100
+                    metadata.type = metadata.type
+                }, container = { extension = it })
+            if (!exported) return@withContext DownloadStatus(false, false, true)
             val (baseFile, basePath) = context.getBasePath()
             requireNotNull(baseFile) { "Download folder is unavailable" }
             val length = output.length()

@@ -31,12 +31,25 @@ for attempt in $(seq 1 120); do
 done
 test "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1
 adb shell input keyevent 82
+status=0
+test_apk="$checkout/app/build/outputs/apk/androidTest/stable/release/app-stable-release-androidTest.apk"
+if [ -n "${KADROGRAD_UPGRADE_FROM:-}" ]; then
+  curl --fail --location --retry 2 --max-time 90 "$KADROGRAD_UPGRADE_FROM" --output "$RUNNER_TEMP/kadrograd-previous.apk"
+  printf '%s  %s\n' "$KADROGRAD_UPGRADE_SHA256" "$RUNNER_TEMP/kadrograd-previous.apk" | sha256sum --check
+  adb install -r -g "$RUNNER_TEMP/kadrograd-previous.apk"
+  adb install -r "$test_apk"
+  adb shell am instrument -w -r -e class 'com.lagradost.cloudstream3.UpgradeStateTest#markBeforeUpgrade' ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/upgrade-before.txt" || status=1
+  grep -q 'OK (1 test)' "$results/upgrade-before.txt" || status=1
+fi
 adb install -r -g "$checkout/app/build/outputs/apk/stable/release/app-stable-release.apk"
 adb shell appops set ru.kadrograd.cloudstream MANAGE_EXTERNAL_STORAGE allow
-adb install -r "$checkout/app/build/outputs/apk/androidTest/stable/release/app-stable-release-androidTest.apk"
-status=0
+adb install -r "$test_apk"
+if [ -n "${KADROGRAD_UPGRADE_FROM:-}" ]; then
+  adb shell am instrument -w -r -e class 'com.lagradost.cloudstream3.UpgradeStateTest#assertAfterUpgrade' ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/upgrade-after.txt" || status=1
+  grep -q 'OK (1 test)' "$results/upgrade-after.txt" || status=1
+fi
 adb shell am instrument -w -r -e class com.lagradost.cloudstream3.AdaptiveDownloadTest ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/instrumentation.txt" || status=1
-grep -q 'OK (4 tests)' "$results/instrumentation.txt" || status=1
+grep -q 'OK (6 tests)' "$results/instrumentation.txt" || status=1
 if grep -q 'FAILURES!!!' "$results/instrumentation.txt"; then status=1; fi
 adb shell am instrument -w -r -e class com.lagradost.cloudstream3.KadrogradHomeTest ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/home-instrumentation.txt" || status=1
 if ! adb pull /sdcard/Android/data/ru.kadrograd.cloudstream/files/android-checks "$results/"; then
