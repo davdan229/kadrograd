@@ -10,6 +10,19 @@ import java.util.concurrent.TimeUnit
 
 /** Opt-in real HTTP checks: -PliveSources --tests '*LiveSourcesCheck'. No Android UI. */
 class LiveSourcesCheck {
+    @Test fun zonaReportedCardsAndTypoSearchRemainLoadable() = runBlocking {
+        val api = ZonaProvider("https://w1.zona.im")
+        for (query in listOf("Спецы", "Невский", "Ганибал")) {
+            val found = api.search(query)
+            val expected = if (query == "Ганибал") "Ганнибал" else query
+            val card = found.first { it.name.equals(expected, ignoreCase = true) && it.type == TvType.TvSeries }
+            val detail = api.load(card.url)
+            assertEquals(card.name, detail.name)
+            assertTrue((detail as TvSeriesLoadResponse).episodes.isNotEmpty())
+            assertTrue(detail.posterUrl?.let(StreamTools::isHttp) == true)
+            println("Zona reported card: metadata, episodes and poster URL verified")
+        }
+    }
     @Test fun animeVostPublicApiKeepsCatalogSearchAndDetailsWhenWebIsUnavailable() = runBlocking {
         val api = VostProvider("http://127.0.0.1:9").apply {
             catalogEndpoint = "https://api.animevost.org/v1/last"
