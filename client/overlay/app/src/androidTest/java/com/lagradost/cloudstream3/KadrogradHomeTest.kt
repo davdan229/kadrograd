@@ -7,6 +7,8 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
 import com.lagradost.cloudstream3.APIHolder.getApiFromNameNull
 import com.lagradost.cloudstream3.mvvm.Resource
+import com.lagradost.cloudstream3.plugins.PluginManager
+import com.lagradost.cloudstream3.plugins.RepositoryManager
 import com.lagradost.cloudstream3.ui.home.HomeViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -31,6 +33,13 @@ class KadrogradHomeTest {
             withTimeout(60_000) {
                 while (getApiFromNameNull("Кадроград · AnimeVost") == null) delay(250)
             }
+            val repo = "https://raw.githubusercontent.com/davdan229/kadrograd/main/repo.json"
+            withTimeout(10_000) {
+                while (RepositoryManager.getRepositories().none { it.url == repo }) delay(100)
+            }
+            val plugin = PluginManager.getPluginsOnline().single { it.internalName == "Kadrograd" }
+            assertEquals(PluginManager.getPluginPath(context, "Kadrograd", repo).absolutePath, plugin.filePath)
+            assertTrue(File(plugin.filePath).isFile)
             assertTrue(getApiFromNameNull("Кадроград · Zona")!!.hasDownloadSupport)
             for ((key, name) in listOf("vost" to "Кадроград · AnimeVost", "libria" to "Кадроград · AniLibria", "zona" to "Кадроград · Zona")) {
                 model.loadAndCancel(name, forceReload = true, fromUI = true)

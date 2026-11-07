@@ -137,14 +137,17 @@ dependencies {
 """, """    suspend fun ___DO_NOT_CALL_FROM_A_PLUGIN_loadAllOnlinePlugins(context: Context) {
         assertNonRecursiveCallstack()
         try {
-            val previous = getPluginsOnline().filter { it.internalName == "Kadrograd" }
-            val bundled = BundledSources.prepare(context, getPluginsOnline())
-            if (bundled != null) {
-                if (loadPlugin(context, File(bundled.filePath), bundled)) {
-                    previous.filter { it.filePath != bundled.filePath }.forEach { deletePluginData(it) }
-                    RepositoryManager.addRepository(RepositoryData("Кадроград", BundledSources.repositoryUrl))
-                } else deletePluginData(bundled)
+            BundledSources.installLock.withLock {
+                val bundled = BundledSources.prepare(context, getPluginsOnline())
+                if (bundled != null) {
+                    if (loadPlugin(context, File(bundled.filePath), bundled)) {
+                        RepositoryManager.addRepository(RepositoryData("Кадроград", BundledSources.repositoryUrl))
+                        BundledSources.finish(context)
+                    } else deletePluginData(bundled)
+                }
             }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
         } catch (error: Exception) {
             logError(error)
         }
