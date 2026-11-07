@@ -26,13 +26,33 @@ class ZonaContractTest {
                 val (code, body) = reply(request)
                 return MockResponse.Builder().code(code).body(body).addHeader("Date", "Sun, 18 Oct 2026 04:19:18 GMT")
                     .apply { if (request.method == "POST") addHeader("Content-Type","text/x-component") }
+                    .apply {
+                        if (request.url.encodedPath.startsWith("/poster-primary/")) addHeader("Content-Type","text/html")
+                        if (request.url.encodedPath.startsWith("/poster-fallback/")) {
+                            addHeader("Content-Type","image/png")
+                            body(okio.Buffer().write(java.util.Base64.getDecoder().decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/h9sAAAAASUVORK5CYII=")))
+                        }
+                    }
                     .headersDelay(headerDelay(request),java.util.concurrent.TimeUnit.MILLISECONDS).build()
             }
         }
         server.start(); base = server.url("/").toString().trimEnd('/')
-        provider = ZonaProvider(base).apply { videoApiOrigins = listOf(base); streamApiOrigins = listOf(base) }
+        provider = ZonaProvider(base).apply {
+            videoApiOrigins = listOf(base); streamApiOrigins = listOf(base); posterOrigins = emptyList()
+        }
     }
     @After fun stop() { server.close() }
+    @Test fun missingPosterUsesTheMatchingReleaseImageAndRejectsHtml() = runBlocking {
+        provider.posterOrigins = listOf("$base/poster-primary", "$base/poster-fallback")
+        reply = { request -> when {
+            request.url.encodedPath.startsWith("/poster-primary/") -> 200 to "<html>Image unavailable</html>"
+            request.url.encodedPath.startsWith("/poster-fallback/") -> 200 to "JPEG".repeat(32)
+            else -> 200 to """{"data":{"slug":"film","title":"Фильм","kp_id":123}}"""
+        } }
+        val loaded = provider.load("$base/movies/film")
+        assertEquals("$base/poster-fallback/123.jpg", loaded.posterUrl)
+        assertTrue(requests.filter { it.url.encodedPath.startsWith("/poster-") }.all { it.method == "GET" })
+    }
     private fun details(season: Int = 1, kp: Int = 412344) = """{"data":{"slug":"mentalist-2008","title":"Менталист","kp_id":$kp,"year":2008,"cover_url":"$base/poster.jpg",
         "rating":8.1,"age_limit":18,"backdrop_url":"https://cdn.example/backdrop.jpg",
         "meta":{"actors":[{"name":"Саймон Бейкер","role":"Патрик Джейн"}]},

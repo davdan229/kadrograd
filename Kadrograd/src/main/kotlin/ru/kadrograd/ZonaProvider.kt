@@ -37,6 +37,8 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
     internal var videoApiOrigins = listOf("https://apiw1.mzona.net", "https://apir1.mzona.net")
     internal var streamApiOrigins = listOf("https://vsw01.zonasearch.com", "https://vsr01.zonasearch.com")
     internal var sourceBudgetMillis = 30_000L
+    internal var posterOrigins = listOf("https://st.kp.yandex.net/images/film_big",
+        "https://kinopoiskapiunofficial.tech/images/posters/kp")
     internal var badges = QualityBadges()
     private val ua = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
     private val headers get() = mapOf("User-Agent" to ua)
@@ -66,19 +68,30 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
     private fun pagePath(series: Boolean, slug: String) = "/${if (series) "tvseries" else "movies"}/$slug"
     private fun validSlug(slug: String) = Regex("[a-z0-9]+(?:-[a-z0-9]+)*").matches(slug)
     private suspend fun detailPoster(url: String?, kpId: Int?): String? {
-        val original = url ?: return null
-        val large = original.replace(Regex("""^(https://img\d+\.zonapic\.com/images/)film_240/"""), "$1film_big/")
-        if (large == original) return original
+        val original = url?.takeIf(StreamTools::isHttp)
+        val large = original?.replace(Regex("""^(https://img\d+\.zonapic\.com/images/)film_240/"""), "$1film_big/")
+        if (original != null && large == original) return original
         suspend fun suitable(candidate: String): Boolean = try {
-            SourceHttp.readEndpoint(candidate, headers, 2, head = true) {
+            SourceHttp.readEndpoint(candidate, headers + ("Range" to "bytes=0-2097151"), 2) {
                 val image = it.header("Content-Type")?.startsWith("image/", ignoreCase = true) != false
-                image && (it.header("Content-Length")?.toLongOrNull() ?: 0L) in 1L..2_097_152L
+                val source = it.body.source()
+                if (!image || source.request(2_097_153)) false else {
+                    val prefix = source.readByteArray(minOf(source.buffer.size, 12))
+                    (prefix.size >= 3 && prefix[0] == 0xff.toByte() && prefix[1] == 0xd8.toByte() && prefix[2] == 0xff.toByte()) ||
+                        (prefix.size >= 8 && prefix.copyOfRange(0,8).contentEquals(byteArrayOf(0x89.toByte(),80,78,71,13,10,26,10))) ||
+                        (prefix.size >= 6 && String(prefix,0,6,Charsets.US_ASCII) in setOf("GIF87a","GIF89a")) ||
+                        (prefix.size >= 12 && String(prefix,0,4,Charsets.US_ASCII) == "RIFF" && String(prefix,8,4,Charsets.US_ASCII) == "WEBP")
+                }
             }
         } catch (_: java.io.IOException) { false }
-        if (suitable(large)) return large
+        if (large != null && suitable(large)) return large
         if (kpId != null && kpId > 0) {
-            val alternative = "https://st.kp.yandex.net/images/film_big/$kpId.jpg"
-            if (suitable(alternative)) return alternative
+            val candidates = posterOrigins.map { "$it/$kpId.jpg" }
+            val fallback = firstReachable(candidates, alternateDelayMillis = 400) { candidate ->
+                require(suitable(candidate)) { "Poster endpoint did not return a usable image" }
+                candidate
+            }
+            if (fallback != null) return fallback
         }
         return original
     }
