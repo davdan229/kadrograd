@@ -72,6 +72,21 @@ class VostContractTest {
         assertTrue(requests.single().headers["User-Agent"].orEmpty().contains("Windows NT"))
         assertEquals("/index.php", requests.single().url.encodedPath)
     }
+    @Test fun officialHomeCardRetainsVerifiedEpisodeIdsWhenBothDetailRoutesFail() = runBlocking {
+        provider.catalogEndpoint = "${provider.mainUrl}/v1/last"
+        provider.infoEndpoint = "${provider.mainUrl}/v1/info"
+        reply = { request -> when (request.url.encodedPath) {
+            "/v1/last" -> 200 to """{"state":{"page":1,"count":1},"data":[
+                {"id":154,"title":"Каталожный релиз","type":"ТВ","urlImagePreview":"https://cdn.example/poster.jpg","series":"{'1 серия':'101'}"}
+            ]}"""
+            else -> 503 to ""
+        } }
+        val item = provider.getMainPage(1, MainPageRequest("Каталог", "all", false)).items.single().list.single()
+        val preview = provider.load(item.url) as AnimeLoadResponse
+        assertEquals("Каталожный релиз", preview.name)
+        assertEquals("https://cdn.example/poster.jpg", preview.posterUrl)
+        assertTrue(preview.episodes.getValue(DubStatus.Dubbed).single().data.contains("101.mp4"))
+    }
     @Test fun unavailableWebSearchUsesApiAndReturnsPlayableCanonicalIds() = runBlocking {
         provider.searchEndpoint = "${provider.mainUrl}/v1/search"
         reply = { req -> if (req.url.encodedPath == "/v1/search") 200 to """{"data":[

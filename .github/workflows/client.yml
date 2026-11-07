@@ -2,13 +2,18 @@ name: Android client
 on:
   push:
     branches: [client-downloads]
-    paths: ['client/**', '.github/workflows/client.yml']
+    paths: ['client/**', 'Kadrograd/**', '.github/workflows/client.yml']
   workflow_dispatch:
     inputs:
       reuse_run:
         description: 'Recheck an existing signed APK from this workflow run ID'
         required: false
         type: string
+      refresh_extension:
+        description: 'Re-sign the existing APK with the extension from this revision'
+        required: false
+        type: boolean
+        default: false
 permissions:
   contents: read
   actions: read
@@ -37,6 +42,18 @@ jobs:
           cache: gradle
           cache-dependency-path: client/upstream.json
       - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
+      - name: Validate reusable app revision
+        if: inputs.reuse_run != '' && inputs.refresh_extension
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REUSE_RUN: ${{ inputs.reuse_run }}
+        run: |
+          previous_sha="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$REUSE_RUN" --jq .head_sha)"
+          git fetch --no-tags origin "$previous_sha"
+          if ! git diff --quiet "$previous_sha" HEAD -- client/overlay/app/src/main client/prepare.py client/upstream.json client/signing-cert.pem; then
+            echo "Client code changed. Build a new APK instead of refreshing its assets."
+            exit 1
+          fi
       - name: Prepare pinned client source
         if: inputs.reuse_run == ''
         run: |
@@ -45,7 +62,7 @@ jobs:
           python3 client/prepare.py .client-work/upstream
           python3 client/make_test_media.py .client-work/upstream/app/src/androidTest/assets/adaptive
       - name: Build and bundle extension
-        if: inputs.reuse_run == ''
+        if: inputs.reuse_run == '' || inputs.refresh_extension
         run: |
           chmod +x gradlew
           ./gradlew :Kadrograd:testDebugUnitTest :Kadrograd:make makePluginsJson --console=plain --max-workers=2
@@ -83,7 +100,29 @@ jobs:
           name: kadrograd-client-checks
           path: .client-work/upstream
       - name: Verify APK identity and signature
-        run: python3 client/verify_apk.py .client-work/upstream/app/build/outputs/apk/stable/release/app-stable-release.apk
+        run: |
+          sdkmanager 'build-tools;35.0.0' > /dev/null
+          python3 client/verify_apk.py .client-work/upstream/app/build/outputs/apk/stable/release/app-stable-release.apk
+      - name: Refresh and sign the bundled extension
+        if: inputs.reuse_run != '' && inputs.refresh_extension
+        env:
+          KADROGRAD_SIGNING_STORE: ${{ secrets.KADROGRAD_SIGNING_STORE }}
+          KADROGRAD_SIGNING_PASSWORD: ${{ secrets.KADROGRAD_SIGNING_PASSWORD }}
+        run: |
+          export KADROGRAD_SIGNING_STORE_PATH="$RUNNER_TEMP/kadrograd-signing.p12"
+          python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          path = Path(os.environ['KADROGRAD_SIGNING_STORE_PATH'])
+          path.write_bytes(base64.b64decode(os.environ['KADROGRAD_SIGNING_STORE'], validate=True))
+          path.chmod(0o600)
+          PY
+          trap 'rm -f "$KADROGRAD_SIGNING_STORE_PATH"' EXIT
+          apk=.client-work/upstream/app/build/outputs/apk/stable/release/app-stable-release.apk
+          python3 client/refresh_bundle.py "$apk" .client-work/upstream/app/src/main/assets/kadrograd "$RUNNER_TEMP/client-unsigned.apk"
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -P 16 -f 4 "$RUNNER_TEMP/client-unsigned.apk" "$RUNNER_TEMP/client-aligned.apk"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign --ks "$KADROGRAD_SIGNING_STORE_PATH" --ks-key-alias kadrograd --ks-pass env:KADROGRAD_SIGNING_PASSWORD --out "$apk" "$RUNNER_TEMP/client-aligned.apk"
+          python3 client/verify_apk.py "$apk"
       - name: Verify adaptive downloads on Android
         timeout-minutes: 12
         run: bash client/run_android_checks.sh .client-work/upstream

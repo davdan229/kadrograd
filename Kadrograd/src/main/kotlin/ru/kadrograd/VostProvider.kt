@@ -9,6 +9,7 @@ import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -20,6 +21,7 @@ import kotlinx.coroutines.sync.withLock
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URI
+import java.util.concurrent.ConcurrentHashMap
 
 /** Uses the official web mirror with the public API as a fallback. */
 class VostProvider(baseUrl: String) : QualityProvider() {
@@ -39,6 +41,9 @@ class VostProvider(baseUrl: String) : QualityProvider() {
     private val episodeMapper = mapper.copy().enable(JsonParser.Feature.ALLOW_SINGLE_QUOTES)
     private val pagePaths = java.util.Collections.synchronizedMap(object : LinkedHashMap<Int,String>(64,0.75f,true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int,String>) = size > 256
+    })
+    private val apiRows = java.util.Collections.synchronizedMap(object : LinkedHashMap<Int,Pair<Long,JsonNode>>(64,0.75f,true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int,Pair<Long,JsonNode>>) = size > 256
     })
     // The mobile site uses a different template. Request the desktop markup consistently, including search.
     private val browserHeaders = mapOf("User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -77,6 +82,13 @@ class VostProvider(baseUrl: String) : QualityProvider() {
     }
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         require(page > 0 && mainPage.any { it.data == request.data })
+        if (page == 1 && request.data == "all" && catalogOrigin() != null) {
+            val official = withTimeoutOrNull(4_000) {
+                try { apiMainPage(page, request).takeIf { result -> result.items.any { it.list.isNotEmpty() } } }
+                catch (_: ErrorLoadingException) { null }
+            }
+            if (official != null) return official
+        }
         val web = withTimeoutOrNull(4_000) {
             try { webMainPage(page, request) }
             catch (_: ErrorLoadingException) { null }
@@ -84,10 +96,12 @@ class VostProvider(baseUrl: String) : QualityProvider() {
         return web ?: apiMainPage(page, request)
     }
 
+    private fun catalogOrigin() = catalogEndpoint ?: "https://api.animevost.org/v1/last".takeIf {
+        mainUrl in setOf("https://v14.vost.pw", "https://animevost.org")
+    }
+
     private suspend fun apiMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val endpoint = catalogEndpoint ?: "https://api.animevost.org/v1/last".takeIf {
-            mainUrl in setOf("https://v14.vost.pw", "https://animevost.org")
-        } ?: throw ErrorLoadingException("AnimeVost: каталог зеркала недоступен")
+        val endpoint = catalogOrigin() ?: throw ErrorLoadingException("AnimeVost: каталог зеркала недоступен")
         val node = catalogMutex.withLock {
             val cached = cachedCatalog
             if (cached != null && cached.first == page && System.currentTimeMillis() - cached.second in 0..30_000) {
@@ -111,7 +125,7 @@ class VostProvider(baseUrl: String) : QualityProvider() {
             val id = row.path("id").asInt()
             val title = row.path("title").asText("")
             val type = kind(row.path("type").asText(""))
-            val progress = Regex("""\[(?:\d{1,5}-)?(\d{1,5})\s+из\s+(\d{1,5})(\+)?]""").find(title)
+            val progress = Regex("""\[(?:\d{1,5}-)?(\d{1,5})\s+из\s+(\d{1,5})(\+)?\]""").find(title)
             val ongoing = progress != null && (progress.groupValues[3].isNotEmpty() ||
                 progress.groupValues[1].toInt() < progress.groupValues[2].toInt())
             val included = when (category) {
@@ -121,6 +135,7 @@ class VostProvider(baseUrl: String) : QualityProvider() {
                 else -> true
             }
             if (id <= 0 || title.isBlank() || !included) return@mapNotNull null
+            if (row.path("series").isTextual) apiRows[id] = System.currentTimeMillis() to row
             newAnimeSearchResponse(title, "$mainUrl/index.php?newsid=$id", type) {
                 posterUrl = row.path("urlImagePreview").asText("").takeIf(StreamTools::isHttp)
                 year = row.path("year").asText("").toIntOrNull()
@@ -197,12 +212,12 @@ class VostProvider(baseUrl: String) : QualityProvider() {
     }
     private fun episodes(doc: Document): Map<String, String> {
         val raw = doc.select("script").asSequence().mapNotNull {
-            Regex("""\bvar\s+data\s*=\s*(\{[\s\S]*?})\s*;""").find(it.data())?.groupValues?.get(1)
+            Regex("""\bvar\s+data\s*=\s*(\{[\s\S]*?\})\s*;""").find(it.data())?.groupValues?.get(1)
         }.firstOrNull() ?: throw ErrorLoadingException("AnimeVost: список серий изменился или отсутствует")
         return parseEpisodes(raw)
     }
     private fun parseEpisodes(raw: String): Map<String, String> {
-        val entries = episodeMapper.readTree(raw.replace(Regex(",\\s*}"), "}"))
+        val entries = episodeMapper.readTree(raw.replace(Regex(",\\s*\\}"), "}"))
         require(entries.isObject)
         return entries.fields().asSequence().mapNotNull { (label, video) ->
             video.asText().takeIf { it.matches(Regex("\\d+")) && label.isNotBlank() }?.let { label to it }
@@ -225,17 +240,39 @@ class VostProvider(baseUrl: String) : QualityProvider() {
         val endpoint = infoEndpoint ?: "https://api.animevost.org/v1/info".takeIf {
             mainUrl in setOf("https://v14.vost.pw", "https://animevost.org")
         }
+        val failures = ConcurrentHashMap<String, String>()
         return firstReachable(listOfNotNull("web", endpoint), alternateDelayMillis = 900) { source ->
-            (if (source == "web") web() else apiRelease(source, id))
-                .takeIf { it.name.isNotBlank() && it.episodes.isNotEmpty() }
-                ?: throw ErrorLoadingException("AnimeVost: нет данных о релизе")
-        } ?: throw ErrorLoadingException("AnimeVost: релиз не найден или недоступен на проверенных адресах")
+            try {
+                (if (source == "web") web() else apiRelease(source, id))
+                    .takeIf { it.name.isNotBlank() && it.episodes.isNotEmpty() }
+                    ?: throw ErrorLoadingException("AnimeVost: нет данных о релизе")
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                val route = if (source == "web") "зеркало" else "API"
+                failures[route] = (failure as? ErrorLoadingException)?.message?.removePrefix("AnimeVost: ")
+                    ?: failure.javaClass.simpleName
+                throw failure
+            }
+        } ?: cachedApiRelease(id) ?: throw ErrorLoadingException(
+            "AnimeVost: карточка недоступна (${failures.entries.sortedBy { it.key }.joinToString(", ") { "${it.key} — ${it.value}" }})"
+        )
+    }
+
+    private fun cachedApiRelease(id: Int): Release? {
+        val (seen, row) = apiRows[id] ?: return null
+        if (System.currentTimeMillis() - seen !in 0..300_000) return null
+        return runCatching { readApiRelease(row) }.getOrNull()?.takeIf { it.name.isNotBlank() && it.episodes.isNotEmpty() }
     }
 
     private suspend fun apiRelease(endpoint: String, id: Int): Release {
         val response = SourceHttp.post("AnimeVost", endpoint, mapOf("id" to id.toString()), timeoutSeconds = 6)
         val row = tryParseJson<JsonNode>(response.text)?.path("data")?.firstOrNull { it.path("id").asInt() == id }
             ?: throw ErrorLoadingException("AnimeVost: API не подтвердил релиз")
+        return readApiRelease(row)
+    }
+
+    private fun readApiRelease(row: JsonNode): Release {
         fun field(key: String) = row.path(key).asText("").takeIf(String::isNotBlank)
         val votes = row.path("votes").asInt()
         val average = row.path("rating").asDouble().div(votes.coerceAtLeast(1))

@@ -15,7 +15,6 @@ import androidx.media3.transformer.DefaultDecoderFactory
 import androidx.media3.transformer.ExoPlayerAssetLoader
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
-import androidx.media3.transformer.InAppMp4Muxer
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
 import com.lagradost.cloudstream3.APIHolder.getApiFromNameNull
@@ -41,16 +40,16 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.coroutineContext
 
-/** Copies clear adaptive streams to MP4, preserving compressed audio and video samples. */
+/** Copies clear adaptive streams, preserving compressed audio and video samples. */
 object AdaptiveDownload {
     @JvmStatic fun isSupported(): Boolean = true
 
     // Downloads must never silently re-encode or reduce the selected resolution.
     private val copyOnlyEncoder = object : Codec.EncoderFactory {
         override fun createForAudioEncoding(format: Format, logSessionId: LogSessionId?): Codec =
-            throw IllegalStateException("Audio cannot be copied to MP4: ${format.sampleMimeType}")
+            throw IllegalStateException("Audio requires transcoding: ${format.sampleMimeType}")
         override fun createForVideoEncoding(format: Format, logSessionId: LogSessionId?): Codec =
-            throw IllegalStateException("Video cannot be copied to MP4: ${format.sampleMimeType}")
+            throw IllegalStateException("Video requires transcoding: ${format.sampleMimeType}")
     }
 
     internal suspend fun exportToFile(
@@ -60,6 +59,7 @@ object AdaptiveDownload {
         interceptor: Interceptor?,
         keepRunning: () -> Boolean = { true },
         progress: (Int) -> Unit = {},
+        container: (String) -> Unit = {},
     ): Boolean = withContext(Dispatchers.Main.immediate) {
         val client = OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
@@ -78,7 +78,7 @@ object AdaptiveDownload {
         val finished = CompletableDeferred<Unit>()
         val transformer = Transformer.Builder(context)
             .setAssetLoaderFactory(loader)
-            .setMuxerFactory(InAppMp4Muxer.Factory())
+            .setMuxerFactory(AdaptiveMuxer.Factory(container))
             .setEncoderFactory(copyOnlyEncoder)
             .addListener(object : Transformer.Listener {
                 override fun onCompleted(composition: Composition, exportResult: ExportResult) {
@@ -110,10 +110,12 @@ object AdaptiveDownload {
             require(output.length() > 0) { "Empty downloaded file" }
             true
         } finally {
-            transformer.cancel()
-            client.dispatcher.cancelAll()
-            client.connectionPool.evictAll()
-            client.dispatcher.executorService.shutdown()
+            try { transformer.cancel() }
+            finally {
+                client.dispatcher.cancelAll()
+                client.connectionPool.evictAll()
+                client.dispatcher.executorService.shutdown()
+            }
         }
     }
 
@@ -126,6 +128,7 @@ object AdaptiveDownload {
         val metadata = DownloadMetaData(id = id, linkHash = link.url.hashCode(), createNotificationCallback = callback, isHLS = true)
         var destination: DownloadObjects.StreamData? = null
         var complete = false
+        var extension = "mp4"
         try {
             metadata.hlsTotal = 100
             metadata.type = DownloadType.IsDownloading
@@ -143,7 +146,7 @@ object AdaptiveDownload {
                         metadata.bytesDownloaded = output.length()
                         metadata.hlsProgress = value * 98 / 100
                         metadata.type = metadata.type
-                    })
+                    }, container = { extension = it })
                 if (exported) break
             }
             val (baseFile, basePath) = context.getBasePath()
@@ -154,7 +157,7 @@ object AdaptiveDownload {
             // A unique destination keeps any existing completed download intact until this one succeeds.
             val uniqueName = "$name [$id-${System.currentTimeMillis()}]"
             val stream = withContext(Dispatchers.IO) {
-                VideoDownloadManager.setupStream(baseFile, uniqueName, folder, "mp4", false)
+                VideoDownloadManager.setupStream(baseFile, uniqueName, folder, extension, false)
             }
             destination = stream
             var stopped = false
@@ -180,7 +183,7 @@ object AdaptiveDownload {
             metadata.bytesWritten = length
             metadata.hlsProgress = 100
             metadata.hlsWrittenProgress = 100
-            metadata.setDownloadFileInfoTemplate(DownloadedFileInfo(length, folder, "$uniqueName.mp4", basePath = basePath))
+            metadata.setDownloadFileInfoTemplate(DownloadedFileInfo(length, folder, "$uniqueName.$extension", basePath = basePath))
             complete = true
             metadata.type = DownloadType.IsDone
             DownloadStatus(false, false, true)
@@ -193,10 +196,11 @@ object AdaptiveDownload {
             DownloadStatus(true, true, false)
         } finally {
             withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) {
-                if (!complete) destination?.delete()
-                output.delete()
+                try {
+                    if (!complete) destination?.delete()
+                    output.delete()
+                } finally { metadata.close() }
             }
-            metadata.close()
         }
     }
 }

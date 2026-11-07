@@ -14,8 +14,10 @@ HASHES = {
     BASE + "utils/downloader/DownloadManager.kt": "46b6aae840806c01a93981800ab9e4ed3e71129c577d4cc7ea6cf58ea9de3002",
     BASE + "utils/InAppUpdater.kt": "11e1a1fbc74f820d84b08a57e74f0e168b311e6e28e8f4d235047672dfc849e7",
     BASE + "plugins/PluginManager.kt": "624f571a6cdb25fd4bc34c70e1b23ed541eb94fc34cf235d418a2e6975d6413e",
+    BASE + "ui/home/HomeViewModel.kt": "7efc2bdacb5fe34bfad05833c5a2e1d3b1362d0a0f16538ce663aa2e3d40b4bd",
     BASE + "ui/result/EpisodeAdapter.kt": "b377967f8b5663a3949836af46773cec8f83ef52c9cfb184de042c0626143f9e",
     BASE + "ui/result/ResultFragmentPhone.kt": "f6dabd385895cb88f3201f632c413d337a4d72289b7f7d28bf87d9ffbe1967a1",
+    BASE + "ui/result/ResultViewModel2.kt": "9a44eb8865d9dca08302751d6a36b651181bb848f2507ecf85570a933e37f4d5",
 }
 
 
@@ -58,6 +60,17 @@ def apply(root):
     text = replace_once(text, "versionCode = libs.versions.versionCode.get().toInt()", f'versionCode = {CONFIG["versionCode"]}')
     text = replace_once(text, "versionName = libs.versions.versionName.get()", f'versionName = "{CONFIG["versionName"]}"')
     text = replace_once(text, "implementation(libs.bundles.media3)", 'implementation(libs.bundles.media3)\n    implementation("androidx.media3:media3-transformer:1.9.3")')
+    text = replace_once(text, "dependencies {\n    // Testing", """// Instrumentation and the app share j$ classes. Configure L8 after AGP's task
+// creation actions so that both APKs retain the same public compatibility APIs.
+afterEvaluate {
+    tasks.withType<com.android.build.gradle.internal.tasks.L8DexDesugarLibTask>().configureEach {
+        keepRulesConfigurations.set(listOf("-dontobfuscate", "-dontoptimize", "-keep class * { *; }"))
+        debuggable.set(false)
+    }
+}
+
+dependencies {
+    // Testing""")
     changes[path] = text
 
     path = BASE + "ui/player/IGenerator.kt"
@@ -67,6 +80,8 @@ def apply(root):
 
     path = BASE + "utils/downloader/DownloadManager.kt"
     text = replace_once(changes[path], " || link.type == ExtractorLinkType.DASH", " /* DASH is handled by AdaptiveDownload below. */")
+    text = replace_once(text, '                        "mp4",\n                        tryResume,',
+        '                        if (link.url.toUri().lastPathSegment?.endsWith(".webm", ignoreCase = true) == true) "webm" else "mp4",\n                        tryResume,')
     text = replace_once(text, "            when (link.type) {\n                ExtractorLinkType.M3U8 -> {", """            if (link.type == ExtractorLinkType.DASH ||
                 (link.type == ExtractorLinkType.M3U8 && getApiFromNameNull(ep.sourceApiName)?.getVideoInterceptor(link) != null)) {
                 return AdaptiveDownload.download(context, link, ep.sourceApiName, name, folder ?: "", ep.id, callback)
@@ -94,20 +109,75 @@ def apply(root):
     path = BASE + "ui/result/ResultFragmentPhone.kt"
     changes[path] = replace_once(changes[path], "requirePathForActions(listOf(ACTION_DOWNLOAD_EPISODE to ep))", "requirePathForActions(listOf(ACTION_DOWNLOAD_MIRROR to ep))")
 
+    path = BASE + "ui/result/ResultViewModel2.kt"
+    text = replace_once(changes[path], "        isCasting: Boolean = false,\n        callback: (Pair<LinkLoadingResult, Int>) -> Unit",
+        "        isCasting: Boolean = false,\n        forDownload: Boolean = false,\n        callback: (Pair<LinkLoadingResult, Int>) -> Unit")
+    text = replace_once(text, """            // Could not find a better way to do this
+            //val context = CloudStreamApp.context
+            postPopup(
+                text,
+                links.links.map { txt("${it.name} ${Qualities.getStringByInt(it.quality)}") }""", """            val selected = if (forDownload) links.copy(links = com.lagradost.cloudstream3.utils.downloader.DownloadChoices.select(links.links)) else links
+            postPopup(
+                text,
+                selected.links.map { txt("${it.name} ${Qualities.getStringByInt(it.quality)}") }""")
+    text = replace_once(text, """                callback.invoke(links to (it ?: return@postPopup))
+            }
+        }
+    }
+
+    private fun acquireSingleSubtitle""", """                callback.invoke(selected to (it ?: return@postPopup))
+            }
+        }
+    }
+
+    private fun acquireSingleSubtitle""")
+    changes[path] = replace_once(text, "                    txt(R.string.episode_action_download_mirror)\n                ) { (result, index) ->",
+        "                    txt(R.string.episode_action_download_mirror),\n                    forDownload = true\n                ) { (result, index) ->")
+
+    path = BASE + "ui/home/HomeViewModel.kt"
+    text = replace_once(changes[path], "                    val items = data.value.mapNotNull { it?.items }.flatten()",
+        """                    _page.postValue(Resource.Success(expandable))
+                    val items = data.value.mapNotNull { it?.items }.flatten()""")
+    text = replace_once(text, """                                3
+                            )
+
+                            _randomItems.postValue(randomItems)""", """                                3
+                            )
+                            if (previewResponses.isEmpty()) {
+                                kotlinx.coroutines.withTimeoutOrNull(20_000) {
+                                    repeat(2) {
+                                        if (previewResponses.isEmpty()) {
+                                            updatePreviewResponses(previewResponses, previewResponsesAdded, randomItems, 3)
+                                        }
+                                    }
+                                }
+                            }
+
+                            _randomItems.postValue(randomItems)""")
+    changes[path] = replace_once(text, """                        _preview.postValue(Resource.Success((previewResponsesAdded.size < currentShuffledList.size) to previewResponses))
+                    }
+                    _page.postValue(Resource.Success(expandable))
+                } catch (e: Exception) {""", """                        _preview.postValue(Resource.Success((previewResponsesAdded.size < currentShuffledList.size) to previewResponses))
+                    }
+                } catch (e: Exception) {""")
+
     path = BASE + "plugins/PluginManager.kt"
     changes[path] = replace_once(changes[path], """    suspend fun ___DO_NOT_CALL_FROM_A_PLUGIN_loadAllOnlinePlugins(context: Context) {
         assertNonRecursiveCallstack()
 """, """    suspend fun ___DO_NOT_CALL_FROM_A_PLUGIN_loadAllOnlinePlugins(context: Context) {
         assertNonRecursiveCallstack()
         try {
-            val previous = getPluginsOnline().filter { it.internalName == "Kadrograd" }
-            val bundled = BundledSources.prepare(context, getPluginsOnline())
-            if (bundled != null) {
-                if (loadPlugin(context, File(bundled.filePath), bundled)) {
-                    previous.filter { it.filePath != bundled.filePath }.forEach { deletePluginData(it) }
-                    RepositoryManager.addRepository(RepositoryData("Кадроград", BundledSources.repositoryUrl))
-                } else deletePluginData(bundled)
+            BundledSources.installLock.withLock {
+                val bundled = BundledSources.prepare(context, getPluginsOnline())
+                if (bundled != null) {
+                    if (loadPlugin(context, File(bundled.filePath), bundled)) {
+                        RepositoryManager.addRepository(RepositoryData("Кадроград", BundledSources.repositoryUrl))
+                        BundledSources.finish(context)
+                    } else deletePluginData(bundled)
+                }
             }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
         } catch (error: Exception) {
             logError(error)
         }
@@ -123,7 +193,7 @@ def apply(root):
     for path in (root / "app/src/main/res").glob("values*/strings.xml"):
         text = path.read_text(encoding="utf-8")
         import re
-        label = "Кадроград" if path.parent.name == "values-ru" else "Kadrograd"
+        label = "CloudStream"
         text = re.sub(r'(<string name="app_name">)[^<]*(</string>)', rf'\g<1>{label}\g<2>', text)
         picker = "Выбрать качество и озвучку" if path.parent.name == "values-ru" else "Choose quality and voice"
         text = re.sub(r'(<string name="episode_action_download_mirror">)[^<]*(</string>)', rf'\g<1>{picker}\g<2>', text)

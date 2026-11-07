@@ -31,12 +31,19 @@ for attempt in $(seq 1 120); do
 done
 test "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1
 adb shell input keyevent 82
-adb install -r "$checkout/app/build/outputs/apk/stable/release/app-stable-release.apk"
+adb install -r -g "$checkout/app/build/outputs/apk/stable/release/app-stable-release.apk"
+adb shell appops set ru.kadrograd.cloudstream MANAGE_EXTERNAL_STORAGE allow
 adb install -r "$checkout/app/build/outputs/apk/androidTest/stable/release/app-stable-release-androidTest.apk"
-adb shell am instrument -w -r -e class com.lagradost.cloudstream3.AdaptiveDownloadTest ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/instrumentation.txt"
-grep -q 'OK (3 tests)' "$results/instrumentation.txt"
-! grep -q 'FAILURES!!!' "$results/instrumentation.txt"
-adb shell am instrument -w -r -e class com.lagradost.cloudstream3.KadrogradHomeTest ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/home-instrumentation.txt"
-adb pull /sdcard/Android/data/ru.kadrograd.cloudstream/files/android-checks "$results/" || true
-grep -q 'OK (1 test)' "$results/home-instrumentation.txt"
-! grep -q 'FAILURES!!!' "$results/home-instrumentation.txt"
+status=0
+adb shell am instrument -w -r -e class com.lagradost.cloudstream3.AdaptiveDownloadTest ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/instrumentation.txt" || status=1
+grep -q 'OK (4 tests)' "$results/instrumentation.txt" || status=1
+if grep -q 'FAILURES!!!' "$results/instrumentation.txt"; then status=1; fi
+adb shell am instrument -w -r -e class com.lagradost.cloudstream3.KadrogradHomeTest ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/home-instrumentation.txt" || status=1
+if ! adb pull /sdcard/Android/data/ru.kadrograd.cloudstream/files/android-checks "$results/"; then
+  if adb root && timeout 20 adb wait-for-device; then
+    adb pull /sdcard/Android/data/ru.kadrograd.cloudstream/files/android-checks "$results/" || true
+  fi
+fi
+grep -q 'OK (1 test)' "$results/home-instrumentation.txt" || status=1
+if grep -q 'FAILURES!!!' "$results/home-instrumentation.txt"; then status=1; fi
+exit "$status"
