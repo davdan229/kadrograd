@@ -14,6 +14,11 @@ on:
         required: false
         type: boolean
         default: false
+      rebuild_tests:
+        description: 'Compile updated device checks against the unchanged signed APK'
+        required: false
+        type: boolean
+        default: false
 permissions:
   contents: read
   actions: read
@@ -43,7 +48,7 @@ jobs:
           cache-dependency-path: client/upstream.json
       - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
       - name: Validate reusable app revision
-        if: inputs.reuse_run != '' && inputs.refresh_extension
+        if: inputs.reuse_run != '' && (inputs.refresh_extension || inputs.rebuild_tests)
         env:
           GH_TOKEN: ${{ github.token }}
           REUSE_RUN: ${{ inputs.reuse_run }}
@@ -54,8 +59,16 @@ jobs:
             echo "Client code changed. Build a new APK instead of refreshing its assets."
             exit 1
           fi
+      - name: Fetch existing signed APK for device checks
+        if: inputs.reuse_run != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.reuse_run }}
+          name: kadrograd-client-checks
+          path: .client-work/upstream
       - name: Prepare pinned client source
-        if: inputs.reuse_run == ''
+        if: inputs.reuse_run == '' || inputs.rebuild_tests
         run: |
           sudo apt-get update -qq
           sudo apt-get install --no-install-recommends -y ffmpeg
@@ -71,11 +84,12 @@ jobs:
           python3 client/bundle_sources.py .client-work/upstream
           ./gradlew --stop
       - name: Build Android client and tests
-        if: inputs.reuse_run == ''
+        if: inputs.reuse_run == '' || inputs.rebuild_tests
         working-directory: .client-work/upstream
         env:
           KADROGRAD_SIGNING_STORE: ${{ secrets.KADROGRAD_SIGNING_STORE }}
           KADROGRAD_SIGNING_PASSWORD: ${{ secrets.KADROGRAD_SIGNING_PASSWORD }}
+          REUSE_RUN: ${{ inputs.reuse_run }}
         run: |
           export KADROGRAD_SIGNING_STORE_PATH="$RUNNER_TEMP/kadrograd-signing.p12"
           python3 - <<'PY'
@@ -89,16 +103,14 @@ jobs:
           PY
           trap 'rm -f "$KADROGRAD_SIGNING_STORE_PATH"' EXIT
           chmod +x gradlew
-          ./gradlew :app:assembleStableRelease :app:assembleStableReleaseAndroidTest :app:testStableReleaseUnitTest -PkadrogradTestBuildType=release --console=plain --max-workers=2 -Dorg.gradle.jvmargs=-Xmx3g -Pkotlin.compiler.execution.strategy=in-process
+          if [ -n "$REUSE_RUN" ]; then
+            sha256sum app/build/outputs/apk/stable/release/app-stable-release.apk > "$RUNNER_TEMP/reused-apk.sha256"
+          fi
+          tasks=(:app:assembleStableReleaseAndroidTest :app:testStableReleaseUnitTest)
+          if [ -z "$REUSE_RUN" ]; then tasks+=(:app:assembleStableRelease); fi
+          ./gradlew "${tasks[@]}" -PkadrogradTestBuildType=release --console=plain --max-workers=2 -Dorg.gradle.jvmargs=-Xmx3g -Pkotlin.compiler.execution.strategy=in-process
+          if [ -n "$REUSE_RUN" ]; then sha256sum --check "$RUNNER_TEMP/reused-apk.sha256"; fi
           ./gradlew --stop
-      - name: Fetch existing signed APK for device checks
-        if: inputs.reuse_run != ''
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          github-token: ${{ github.token }}
-          run-id: ${{ inputs.reuse_run }}
-          name: kadrograd-client-checks
-          path: .client-work/upstream
       - name: Verify APK identity and signature
         run: |
           sdkmanager 'build-tools;35.0.0' > /dev/null

@@ -59,4 +59,7 @@ if ! adb pull /sdcard/Android/data/ru.kadrograd.cloudstream/files/android-checks
 fi
 grep -q 'OK (1 test)' "$results/home-instrumentation.txt" || status=1
 if grep -q 'FAILURES!!!' "$results/home-instrumentation.txt"; then status=1; fi
+adb shell am instrument -w -r -e class com.lagradost.cloudstream3.TorrentPlaybackTest ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/torrent-instrumentation.txt" || status=1
+grep -q 'OK (1 test)' "$results/torrent-instrumentation.txt" || status=1
+if grep -q 'FAILURES!!!' "$results/torrent-instrumentation.txt"; then status=1; fi
 exit "$status"

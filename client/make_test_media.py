@@ -37,6 +37,11 @@ def generate(root):
 #EXT-X-STREAM-INF:BANDWIDTH=500000,RESOLUTION=1920x1080,CODECS="avc1.42c028,mp4a.40.2",AUDIO="audio"
 video.m3u8
 ''', encoding="utf-8")
+    torrent = root / "torrent"
+    torrent.mkdir(exist_ok=True)
+    ffmpeg(["-i", str((dash / "manifest.mpd").resolve()), "-map", "0:v:0", "-map", "0:a:0", "-map", "0:a:1",
+            "-c", "copy", "-metadata:s:a:0", "title=Studio A", "-metadata:s:a:1", "title=Studio B",
+            "-metadata:s:a:0", "language=rus", "-metadata:s:a:1", "language=eng", "selected.webm"], torrent)
     print("Generated", sum(p.stat().st_size for p in root.rglob("*") if p.is_file()), "bytes of synthetic test media")
 
 
