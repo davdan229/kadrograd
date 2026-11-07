@@ -23,7 +23,10 @@ internal class QualityBadges(
             if (variants.any { it.isFourK }) add(url)
             if (voices.any(dubLabel::containsMatchIn)) add("dub|$url")
         }
-        if (keys.isEmpty()) return
+        var removed = false
+        if (variants.isNotEmpty() && url !in keys) removed = entries.remove(url) != null
+        if (voices.isNotEmpty() && "dub|$url" !in keys) removed = entries.remove("dub|$url") != null || removed
+        if (keys.isEmpty() && !removed) return
         val time = now()
         entries.entries.removeAll { time-it.value !in 0..ttl }
         for (key in keys) {

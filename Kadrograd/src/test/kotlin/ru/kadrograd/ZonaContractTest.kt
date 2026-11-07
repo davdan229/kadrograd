@@ -107,6 +107,23 @@ class ZonaContractTest {
         assertEquals(SearchQuality.FourK,dubbed.quality)
         assertTrue(dubbed.dubStatus.orEmpty().contains(DubStatus.Dubbed))
     }
+    @Test fun publishedUhdIndexCanAddANewMovieAndCannotSubstituteAnotherTitle() = runBlocking {
+        provider.uhdIndexUrl = "$base/uhd.json"
+        var catalogId = 123
+        reply = { req -> when (req.url.encodedPath) {
+            "/uhd.json" -> 200 to """{"version":1,"movies":[
+                {"slug":"new-film","kpId":123,"width":3840,"height":1608,"checked":${System.currentTimeMillis()}}
+            ]}"""
+            "/api/movies/new-film" -> 200 to """{"data":{"slug":"new-film","title":"Новый фильм","kp_id":$catalogId}}"""
+            else -> 404 to ""
+        } }
+        val row = provider.getMainPage(1, MainPageRequest("Фильмы в 4K", "verified-4k", false))
+        assertEquals(listOf("Новый фильм"), row.items.single().list.map { it.name })
+        assertEquals(SearchQuality.FourK, row.items.single().list.single().quality)
+        catalogId = 999
+        val changed = provider.getMainPage(1, MainPageRequest("Фильмы в 4K", "verified-4k", false))
+        assertTrue(changed.items.single().list.isEmpty())
+    }
     @Test fun emptySearchRetriesShorterQueriesAndOnlyReturnsCloseTitles() = runBlocking {
         reply = { request ->
             val cards = if (request.url.pathSegments.last() == "мента") """

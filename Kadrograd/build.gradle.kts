@@ -1,5 +1,5 @@
 // CloudStream uses a monotonically increasing integer to find updates.
-version = 33
+version = 34
 val releaseVersion = "1.1.0"
 cloudstream {
     description = "Кадроград $releaseVersion. Zona для кино и сериалов, AniLibria и AnimeVost для аниме."

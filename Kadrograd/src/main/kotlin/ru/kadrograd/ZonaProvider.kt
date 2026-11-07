@@ -40,6 +40,9 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
     internal var posterOrigins = listOf("https://st.kp.yandex.net/images/film_big",
         "https://kinopoiskapiunofficial.tech/images/posters/kp")
     internal var badges = QualityBadges()
+    private val uhdCatalog = UhdCatalog()
+    internal var uhdIndexUrl: String? = "https://raw.githubusercontent.com/davdan229/kadrograd/uhd-catalog/catalog.json"
+        .takeIf { mainUrl == "https://w1.zona.im" }
     private val ua = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
     private val headers get() = mapOf("User-Agent" to ua)
     private val nativeTracks by lazy { ZonaTracks({streamApiOrigins},ua) }
@@ -115,6 +118,7 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         if (mainPage.none { it.data == request.data }) error("неизвестный раздел")
         if (request.data == "verified-4k") {
             val prefix = "$mainUrl/movies/"
+            val indexed = uhdCatalog.movies(uhdIndexUrl).associateBy { it.slug }
             val openCards = coroutineScope {
                 BlenderUhd.films.map { film -> async {
                     val title = try { details(false, film.slug) }
@@ -127,14 +131,22 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
             }
             val movies = badges.fourKPages().filter { it.startsWith(prefix) }
                 .map { it.removePrefix(prefix) }.filter(::validSlug)
-            val current = (openCards.keys + movies).toList()
+            val current = (indexed.keys + openCards.keys + movies).toList()
             val start = (page.toLong() - 1) * 12
             val slugs = current.drop(start.coerceAtMost(current.size.toLong()).toInt()).take(12)
             val cards = coroutineScope {
                 val slots = Semaphore(3)
                 slugs.map { slug -> async {
                     slots.withPermit {
-                        try { openCards[slug] ?: card(details(false, slug), false, "") }
+                        try {
+                            openCards[slug] ?: details(false, slug).let { title ->
+                                val recorded = indexed[slug]
+                                if (recorded != null && title.kpId != recorded.kpId) return@withPermit null
+                                if (recorded != null) badges.observe(prefix + slug,
+                                    listOf(ZonaTracks.Variant(recorded.width, recorded.height)))
+                                card(title, false, "")
+                            }
+                        }
                         catch (_: ErrorLoadingException) { null }
                     }
                 } }.awaitAll().filterNotNull()
@@ -308,6 +320,21 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
             }
             else -> emptyList()
         }
+    }
+    internal suspend fun discoverUhd(kpId: Int): List<ZonaTracks.Variant> {
+        require(kpId > 0)
+        val time = clock()
+        val result = tryParseJson<Sources>(transport(videoApiOrigins, "/getVideoSources",
+            "movie_source_types=32&kinopoisk_id=$kpId&episode_key=&trailer=false", time))
+            ?: error("изменился формат ответа плеера")
+        val source = result.data.firstOrNull { it.type == 32 && it.kpId == kpId && it.key.matches(Regex("\\d+")) }
+            ?: return emptyList()
+        val found = java.util.concurrent.ConcurrentLinkedQueue<ZonaTracks.Found>()
+        val failures = java.util.concurrent.ConcurrentLinkedQueue<Exception>()
+        nativeTracks.load(source.key, null, null, found::add, formats = setOf("dasha"),
+            minimumWidth = 3840, onFailure = failures::add)
+        if (failures.isNotEmpty()) throw failures.first()
+        return found.flatMap { it.variants }.filter { it.isFourK }.distinct()
     }
     private suspend fun available(stream: Stream, ref: String,
         onUhd: ((ZonaTracks.Variant) -> Unit)? = null, requireClearMedia: Boolean = false): Boolean {

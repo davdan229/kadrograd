@@ -13,6 +13,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
@@ -30,6 +32,8 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
     private val headers get() = mapOf("User-Agent" to ua, "Cache-Control" to "no-cache")
     private val json = mapper.copy().configure(JsonParser.Feature.ALLOW_UNQUOTED_FIELD_NAMES, true)
     private var alphabetCache: Pair<Long, String>? = null
+    private val configMutex = Mutex()
+    private var configCache: Triple<List<String>, Long, String>? = null
 
     data class Variant(val width: Int, val height: Int) {
         val dimensions get() = "${width}×$height"
@@ -183,14 +187,22 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
             error("Unclosed player data")
         }
     }
-    private suspend fun config(): String = firstReachable(origins()) { origin ->
-        val raw = SourceHttp.readEndpoint("$origin/static/ext32s.txt",headers,5) { it.body.string() }
-        val node = json.readTree(String(Base64.decode(raw.trim()), Charsets.UTF_8))
-        val value = String(Base64.decode(node.path("ut").asText()).map { (it.toInt() xor 59).toByte() }.toByteArray(), Charsets.UTF_8)
-        require(value.startsWith("https://") && value.count { it == '{' } == 1 && value.contains("{key}") &&
-            StreamTools.isHttp(value.replace("{key}","1")))
-        value
-    } ?: throw ErrorLoadingException("Zona: основной плеер недоступен через эту сеть")
+    private suspend fun config(): String = configMutex.withLock {
+        val addresses = origins()
+        configCache?.takeIf {
+            it.first == addresses && System.currentTimeMillis() - it.second in 0..900_000
+        }?.let { return@withLock it.third }
+        val result = firstReachable(addresses) { origin ->
+            val raw = SourceHttp.readEndpoint("$origin/static/ext32s.txt",headers,5) { it.body.string() }
+            val node = json.readTree(String(Base64.decode(raw.trim()), Charsets.UTF_8))
+            val value = String(Base64.decode(node.path("ut").asText()).map { (it.toInt() xor 59).toByte() }.toByteArray(), Charsets.UTF_8)
+            require(value.startsWith("https://") && value.count { it == '{' } == 1 && value.contains("{key}") &&
+                StreamTools.isHttp(value.replace("{key}","1")))
+            value
+        } ?: throw ErrorLoadingException("Zona: основной плеер недоступен через эту сеть")
+        configCache = Triple(addresses.toList(), System.currentTimeMillis(), result)
+        result
+    }
     private suspend fun alphabet(embed: String): String {
         alphabetCache?.takeIf { System.currentTimeMillis() - it.first < 900_000 }?.let { return it.second }
         val origin = URI(embed).let { "${it.scheme}://${it.rawAuthority}" }
@@ -201,7 +213,9 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
         alphabetCache = System.currentTimeMillis() to result
         return result
     }
-    suspend fun load(key: String, season: Int?, episode: Int?, onFound: (Found) -> Unit) {
+    suspend fun load(key: String, season: Int?, episode: Int?, onFound: (Found) -> Unit,
+        formats: Set<String> = setOf("dash", "hls", "dasha"), minimumWidth: Int = 0,
+        onFailure: (Exception) -> Unit = {}) {
         require(key.matches(Regex("\\d+")))
         val embed = config().replace("{key}",key)
         val html = SourceHttp.get("Zona", embed, headers = headers, timeoutSeconds = 7).text
@@ -224,30 +238,32 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
         val subs = media.path("cc").mapNotNull { node -> node.path("url").asText().takeIf(StreamTools::isHttp)?.let { Sub(node.path("name").asText("Субтитры"),it) } }
         coroutineScope {
             listOf("dash","hls","dasha").mapNotNull { format ->
+                if (format !in formats) return@mapNotNull null
                 val url = media.path(format).asText().takeIf(StreamTools::isHttp) ?: return@mapNotNull null
-                if (format == "dasha" && !supportsAv1()) return@mapNotNull null
                 format to url
             }
                 .forEach { (format,url) -> launch {
                     try {
                         onFound(if (format == "hls") ZonaHls.load(url,base,names,subs)
-                            else dash(url,base.copy(media=url),names,subs).copy(av1 = format == "dasha"))
+                            else dash(url,base.copy(media=url),names,subs,minimumWidth).copy(av1 = format == "dasha"))
                     } catch (cancelled: CancellationException) { throw cancelled }
-                      catch (_: Exception) { }
+                      catch (failure: Exception) { onFailure(failure) }
                 } }
         }
     }
-    private fun supportsAv1(): Boolean = runCatching {
-        val format = android.media.MediaFormat.createVideoFormat("video/av01", 1920, 1080)
-        android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS).findDecoderForFormat(format) != null
-    }.getOrDefault(false)
-    private suspend fun dash(url: String, context: Context, names: List<String>, subs: List<Sub>): Found {
+    private suspend fun dash(url: String, context: Context, names: List<String>, subs: List<Sub>, minimumWidth: Int): Found {
         require(context.valid())
         val response = SourceHttp.get("Zona",context.transform(url),headers=headers,timeoutSeconds=6)
         val document = manifest(response.text)
         val voices = namedAudio(document,names)
         val variants = variants(document)
         if (variants.isEmpty()) throw ErrorLoadingException("Zona: разрешения основного видео отсутствуют")
+        if (minimumWidth > 0) {
+            document.getElementsByTag("Representation").filter {
+                it.hasAttr("width") && (it.attr("width").toIntOrNull() ?: 0) < minimumWidth
+            }.forEach(Element::remove)
+            if (variants(document).isEmpty()) return Found(url, context.copy(voices = voices), emptyList(), subs)
+        }
         // Verify initialization, early and middle media for every video resolution and every audio track.
         withContext(Dispatchers.IO) {
             val client = com.lagradost.cloudstream3.app.baseClient.newBuilder().callTimeout(4,java.util.concurrent.TimeUnit.SECONDS).build()
