@@ -21,13 +21,18 @@ import kotlinx.coroutines.withTimeout
 import org.junit.Assert.*
 import org.junit.Test
 import java.io.ByteArrayOutputStream
+import java.io.DataInputStream
+import java.io.DataOutputStream
+import java.io.IOException
 import java.net.InetAddress
 import java.net.ServerSocket
+import java.nio.ByteBuffer
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
-/** Exercises the shipped native engine with synthetic media and an isolated HTTP web seed. */
+/** Exercises the shipped native engine with synthetic media and an isolated BitTorrent peer. */
 class TorrentPlaybackTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
 
@@ -48,28 +53,91 @@ class TorrentPlaybackTest {
         }
     }.toByteArray()
 
-    private inner class WebSeed : AutoCloseable {
+    private inner class PeerSeed : AutoCloseable {
         val requests = ConcurrentLinkedQueue<String>()
+        val blocksServed = AtomicInteger()
         private val media = instrumentation.context.assets.open("adaptive/torrent/selected.webm").use { it.readBytes() }
         private val readme = "Synthetic UHD fixture\n".toByteArray()
+        private val content = readme + media
         private val server = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
+        private val peer = ServerSocket(0, 4, InetAddress.getByName("127.0.0.1"))
         private val executor = Executors.newFixedThreadPool(4)
+        private val peerExecutor = Executors.newFixedThreadPool(2)
         val origin = "http://127.0.0.1:${server.localPort}"
-        private val torrent = run {
-            val bytes = readme + media
+        private val info = run {
             val pieces = ByteArrayOutputStream()
             val digest = MessageDigest.getInstance("SHA-1")
-            for (start in bytes.indices step 16_384) {
-                pieces.write(digest.digest(bytes.copyOfRange(start, minOf(start + 16_384, bytes.size))))
+            for (start in content.indices step 16_384) {
+                pieces.write(digest.digest(content.copyOfRange(start, minOf(start + 16_384, content.size))))
             }
-            bencode(mapOf("url-list" to listOf("$origin/seed/"), "info" to mapOf(
+            mapOf(
                 "name" to "fixture", "private" to 1, "piece length" to 16_384, "pieces" to pieces.toByteArray(),
                 "files" to listOf(
                     mapOf("length" to readme.size, "path" to listOf("readme.txt")),
                     mapOf("length" to media.size, "path" to listOf("selected.webm")),
                 ),
-            )))
+            )
         }
+        private val infoHash = MessageDigest.getInstance("SHA-1").digest(bencode(info))
+        private val torrent = bencode(mapOf("announce" to "$origin/announce", "info" to info))
+        private val peerWorker = Thread {
+            while (!peer.isClosed) {
+                val socket = try { peer.accept() } catch (_: IOException) { break }
+                peerExecutor.submit {
+                    try {
+                        socket.use {
+                            it.soTimeout = 15_000
+                            val input = DataInputStream(it.getInputStream())
+                            val output = DataOutputStream(it.getOutputStream())
+                            if (input.readUnsignedByte() != 19) return@use
+                            val protocol = ByteArray(19).also(input::readFully)
+                            if (String(protocol, Charsets.US_ASCII) != "BitTorrent protocol") return@use
+                            input.readFully(ByteArray(8))
+                            val hash = ByteArray(20).also(input::readFully)
+                            if (!hash.contentEquals(infoHash)) return@use
+                            input.readFully(ByteArray(20))
+                            output.writeByte(19)
+                            output.write(protocol)
+                            output.write(ByteArray(8))
+                            output.write(infoHash)
+                            output.write("-KD0001-000000000001".toByteArray())
+                            val count = (content.size + 16_383) / 16_384
+                            val bitfield = ByteArray((count + 7) / 8)
+                            for (index in 0 until count) {
+                                bitfield[index / 8] = (bitfield[index / 8].toInt() or (1 shl (7 - index % 8))).toByte()
+                            }
+                            output.writeInt(1 + bitfield.size)
+                            output.writeByte(5)
+                            output.write(bitfield)
+                            output.writeInt(1)
+                            output.writeByte(1)
+                            output.flush()
+                            while (!peer.isClosed) {
+                                val length = input.readInt()
+                                if (length == 0) continue
+                                if (length !in 1..262_144) return@use
+                                val message = ByteArray(length).also(input::readFully)
+                                if (message[0].toInt() != 6 || length != 13) continue
+                                val fields = ByteBuffer.wrap(message, 1, 12)
+                                val index = fields.int
+                                val begin = fields.int
+                                val requested = fields.int
+                                if (index !in 0 until count || begin !in 0..16_383 || requested !in 1..16_384) return@use
+                                val start = index * 16_384 + begin
+                                if (begin + requested > 16_384 || start + requested > content.size) return@use
+                                output.writeInt(9 + requested)
+                                output.writeByte(7)
+                                output.writeInt(index)
+                                output.writeInt(begin)
+                                output.write(content, start, requested)
+                                output.flush()
+                                blocksServed.incrementAndGet()
+                            }
+                        }
+                    } catch (_: IOException) { /* The client closes its peer when playback stops. */ }
+                }
+            }
+        }.apply { isDaemon = true; start() }
         private val worker = Thread {
             while (!server.isClosed) {
                 val socket = try { server.accept() } catch (_: Exception) { break }
@@ -87,8 +155,8 @@ class TorrentPlaybackTest {
                         requests.add(path)
                         val bytes = when {
                             path == "/fixture.torrent" -> torrent
-                            path.endsWith("/selected.webm") -> media
-                            path.endsWith("/readme.txt") -> readme
+                            path == "/announce" -> bencode(mapOf("interval" to 15, "complete" to 1, "incomplete" to 0,
+                                "peers" to byteArrayOf(127, 0, 0, 1, (peer.localPort ushr 8).toByte(), peer.localPort.toByte())))
                             else -> byteArrayOf()
                         }
                         val range = headers["range"]?.let { Regex("bytes=(\\d+)-(\\d*)").matchEntire(it) }
@@ -109,11 +177,15 @@ class TorrentPlaybackTest {
             }
         }.apply { isDaemon = true; start() }
 
-        override fun close() { server.close(); executor.shutdownNow(); worker.join(1000) }
+        override fun close() {
+            server.close(); peer.close()
+            executor.shutdownNow(); peerExecutor.shutdownNow()
+            worker.join(1000); peerWorker.join(1000)
+        }
     }
 
     @Test fun nativeEnginePlaysTheSelectedFileInUhdWithBothAudioTracks() = runBlocking<Unit> {
-        WebSeed().use { seed ->
+        PeerSeed().use { seed ->
             ActivityScenario.launch(MainActivity::class.java).use { _ ->
                 val link = newExtractorLink("Fixture", "Synthetic UHD", "${seed.origin}/fixture.torrent?index=1", ExtractorLinkType.TORRENT) {
                     quality = 2160
@@ -148,13 +220,16 @@ class TorrentPlaybackTest {
                             }.filter { MimeTypes.isAudio(it.sampleMimeType) }
                             assertEquals(2, audioTracks.size)
                         }
-                        assertTrue(seed.requests.any { it.endsWith("/selected.webm") })
+                        assertTrue("No blocks arrived from the fixture peer", seed.blocksServed.get() > 0)
                         android.util.Log.i("KadrogradTorrentTest", "Native engine rendered ${size.width}×${size.height} with two audio tracks")
                     } finally {
                         instrumentation.runOnMainSync { player?.release() }
                         reader.close()
                     }
-                } finally { withContext(Dispatchers.IO) { Torrent.clearAll() } }
+                } finally {
+                    android.util.Log.i("KadrogradTorrentTest", "Fixture requests=${seed.requests.toList()}, blocks=${seed.blocksServed.get()}")
+                    withContext(Dispatchers.IO) { Torrent.clearAll() }
+                }
             }
         }
     }
