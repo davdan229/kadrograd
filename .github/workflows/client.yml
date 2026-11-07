@@ -42,6 +42,18 @@ jobs:
           cache: gradle
           cache-dependency-path: client/upstream.json
       - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
+      - name: Validate reusable app revision
+        if: inputs.reuse_run != '' && inputs.refresh_extension
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REUSE_RUN: ${{ inputs.reuse_run }}
+        run: |
+          previous_sha="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$REUSE_RUN" --jq .head_sha)"
+          git fetch --no-tags origin "$previous_sha"
+          if ! git diff --quiet "$previous_sha" HEAD -- client/overlay/app/src/main client/prepare.py client/upstream.json client/signing-cert.pem; then
+            echo "Client code changed. Build a new APK instead of refreshing its assets."
+            exit 1
+          fi
       - name: Prepare pinned client source
         if: inputs.reuse_run == ''
         run: |

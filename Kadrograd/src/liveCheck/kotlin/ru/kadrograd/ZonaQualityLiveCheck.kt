@@ -14,6 +14,7 @@ class ZonaQualityLiveCheck {
     private val api = ZonaProvider("https://w1.zona.im")
     @Test fun openBlenderFilmsPopulateTheFreshUhdShelfAndPlayWithoutTheZonaVideoServer() = runBlocking {
         api.videoApiOrigins = emptyList()
+        api.uhdIndexUrl = null
         val shelf = api.getMainPage(1, MainPageRequest("Фильмы в 4K", "verified-4k", false))
         val cards = shelf.items.single().list
         assertEquals(BlenderUhd.films.map { it.slug }, cards.map { it.url.substringAfterLast('/') })
