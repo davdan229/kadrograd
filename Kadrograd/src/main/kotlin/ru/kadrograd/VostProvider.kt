@@ -125,7 +125,7 @@ class VostProvider(baseUrl: String) : QualityProvider() {
             val id = row.path("id").asInt()
             val title = row.path("title").asText("")
             val type = kind(row.path("type").asText(""))
-            val progress = Regex("""\[(?:\d{1,5}-)?(\d{1,5})\s+из\s+(\d{1,5})(\+)?]""").find(title)
+            val progress = Regex("""\[(?:\d{1,5}-)?(\d{1,5})\s+из\s+(\d{1,5})(\+)?\]""").find(title)
             val ongoing = progress != null && (progress.groupValues[3].isNotEmpty() ||
                 progress.groupValues[1].toInt() < progress.groupValues[2].toInt())
             val included = when (category) {
@@ -212,12 +212,12 @@ class VostProvider(baseUrl: String) : QualityProvider() {
     }
     private fun episodes(doc: Document): Map<String, String> {
         val raw = doc.select("script").asSequence().mapNotNull {
-            Regex("""\bvar\s+data\s*=\s*(\{[\s\S]*?})\s*;""").find(it.data())?.groupValues?.get(1)
+            Regex("""\bvar\s+data\s*=\s*(\{[\s\S]*?\})\s*;""").find(it.data())?.groupValues?.get(1)
         }.firstOrNull() ?: throw ErrorLoadingException("AnimeVost: список серий изменился или отсутствует")
         return parseEpisodes(raw)
     }
     private fun parseEpisodes(raw: String): Map<String, String> {
-        val entries = episodeMapper.readTree(raw.replace(Regex(",\\s*}"), "}"))
+        val entries = episodeMapper.readTree(raw.replace(Regex(",\\s*\\}"), "}"))
         require(entries.isObject)
         return entries.fields().asSequence().mapNotNull { (label, video) ->
             video.asText().takeIf { it.matches(Regex("\\d+")) && label.isNotBlank() }?.let { label to it }
