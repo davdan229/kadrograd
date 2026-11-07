@@ -83,18 +83,22 @@ class TorrentPlaybackTest {
         private val peerWorker = Thread {
             while (!peer.isClosed) {
                 val socket = try { peer.accept() } catch (_: IOException) { break }
+                android.util.Log.i("KadrogradTorrentTest", "Fixture peer accepted a connection")
                 peerExecutor.submit {
                     try {
                         socket.use {
                             it.soTimeout = 15_000
                             val input = DataInputStream(it.getInputStream())
                             val output = DataOutputStream(it.getOutputStream())
-                            if (input.readUnsignedByte() != 19) return@use
+                            val first = input.readUnsignedByte()
+                            android.util.Log.i("KadrogradTorrentTest", "Peer handshake prefix=$first")
+                            if (first != 19) return@use
                             val protocol = ByteArray(19).also(input::readFully)
                             if (String(protocol, Charsets.US_ASCII) != "BitTorrent protocol") return@use
                             input.readFully(ByteArray(8))
                             val hash = ByteArray(20).also(input::readFully)
                             if (!hash.contentEquals(infoHash)) return@use
+                            android.util.Log.i("KadrogradTorrentTest", "Peer info hash matched")
                             input.readFully(ByteArray(20))
                             output.writeByte(19)
                             output.write(protocol)
@@ -117,6 +121,7 @@ class TorrentPlaybackTest {
                                 if (length == 0) continue
                                 if (length !in 1..262_144) return@use
                                 val message = ByteArray(length).also(input::readFully)
+                                android.util.Log.i("KadrogradTorrentTest", "Peer message=${message[0]} length=$length")
                                 if (message[0].toInt() != 6 || length != 13) continue
                                 val fields = ByteBuffer.wrap(message, 1, 12)
                                 val index = fields.int
@@ -134,7 +139,9 @@ class TorrentPlaybackTest {
                                 blocksServed.incrementAndGet()
                             }
                         }
-                    } catch (_: IOException) { /* The client closes its peer when playback stops. */ }
+                    } catch (closed: IOException) {
+                        android.util.Log.i("KadrogradTorrentTest", "Fixture peer closed: ${closed.javaClass.simpleName}")
+                    }
                 }
             }
         }.apply { isDaemon = true; start() }
