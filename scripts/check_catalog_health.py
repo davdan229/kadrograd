@@ -1,7 +1,7 @@
 """Bounded checks of the public catalogs and one published media variant."""
 import json
 from urllib.error import HTTPError, URLError
-from urllib.parse import urljoin
+from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
 
 
@@ -9,8 +9,9 @@ class Missing(Exception):
     pass
 
 
-def fetch(url, limit=512_000, headers=None):
-    request = Request(url, headers={"User-Agent": "Mozilla/5.0", **(headers or {})})
+def fetch(url, limit=512_000, headers=None, form=None):
+    encoded = urlencode(form).encode("utf-8") if form is not None else None
+    request = Request(url, data=encoded, headers={"User-Agent": "Mozilla/5.0", **(headers or {})})
     with urlopen(request, timeout=8) as response:
         return response.read(limit), response.url
 
@@ -30,6 +31,28 @@ def animevost():
         raise ValueError("release identity not present")
     if b"var data" not in body:
         raise ValueError("episode markup not recognized")
+
+
+def animevost_api():
+    origin = "https://api.animevost.org/v1"
+    pages = []
+    for page in (1, 2):
+        body, _ = fetch(f"{origin}/last?page={page}&quantity=20")
+        result = json.loads(body)
+        if result["state"]["page"] != page or not isinstance(result["data"], list):
+            raise ValueError("catalog page contract changed")
+        ids = {row["id"] for row in result["data"] if row.get("title") and row.get("id", 0) > 0}
+        if not ids:
+            raise ValueError("catalog page has no valid titles")
+        pages.append(ids)
+    if pages[0] == pages[1]:
+        raise ValueError("catalog repeats the same page")
+    body, _ = fetch(origin + "/info", form={"id": "1895"})
+    release = next((row for row in json.loads(body)["data"] if row.get("id") == 1895), None)
+    if release is None:
+        raise Missing("known release absent from API response")
+    if not release.get("title") or not release.get("series"):
+        raise ValueError("release has no title or episodes")
 
 
 def libria():
@@ -79,6 +102,7 @@ def check(name, probe):
 
 
 if __name__ == "__main__":
-    results = [check("Zona episode", zona), check("AnimeVost card", animevost), check("AniLibria 1080p sample", libria)]
+    results = [check("Zona episode", zona), check("AnimeVost card", animevost),
+               check("AnimeVost API catalog and card", animevost_api), check("AniLibria 1080p sample", libria)]
     print(json.dumps(results, indent=2))
     raise SystemExit(any(row["status"] != "ok" for row in results))
