@@ -2,6 +2,8 @@ package com.lagradost.cloudstream3
 
 import android.media.MediaExtractor
 import android.media.MediaFormat
+import android.app.Notification
+import android.app.NotificationManager
 import android.view.View
 import androidx.test.core.app.ActivityScenario
 import androidx.test.espresso.Espresso.onData
@@ -133,7 +135,7 @@ class AdaptiveDownloadTest {
         val releaseBody = CountDownLatch(1)
         val delayed = AtomicBoolean(false)
         FixtureServer { path ->
-            if (path.contains("/chunk-1-") && delayed.compareAndSet(false, true)) {
+            if (path.contains("/chunk-1-00002.") && delayed.compareAndSet(false, true)) {
                 waiting.countDown()
                 check(releaseBody.await(30, TimeUnit.SECONDS))
             }
@@ -189,14 +191,30 @@ class AdaptiveDownloadTest {
                     assertTrue(VideoDownloadManager.currentDownloads.value.isEmpty())
                     onData(allOf(instanceOf(String::class.java), containsString("Studio B · 1080"))).perform(click())
                     withContext(Dispatchers.IO) { assertTrue("Queue service did not request video", waiting.await(20, TimeUnit.SECONDS)) }
-                    downloadId = VideoDownloadManager.currentDownloads.value.single()
+                    downloadId = checkNotNull(DownloadQueueService.downloadInstances.value.singleOrNull()) {
+                        "Queue entry disappeared: status=${VideoDownloadManager.downloadStatus}, files=${directory.walkTopDown().filter { it.isFile }.map { it.name }.toList()}"
+                    }.downloadQueueWrapper.id
                     assertTrue(DownloadQueueService.isRunning)
+                    val activeInfo = CloudStreamApp.getKey<DownloadObjects.DownloadedFileInfo>(VideoDownloadManager.KEY_DOWNLOAD_INFO, downloadId.toString())
+                    assertNotNull("The active download has no progress entry", activeInfo)
+                    val notifications = context.getSystemService(NotificationManager::class.java)
+                    withTimeout(5_000) {
+                        while (notifications.activeNotifications.none {
+                            it.id == downloadId && it.notification.extras.getInt(Notification.EXTRA_PROGRESS_MAX) == 100 &&
+                                it.notification.extras.getInt(Notification.EXTRA_PROGRESS) in 1..98
+                        }) delay(100)
+                    }
+                    val screenshots = File(context.getExternalFilesDir(null), "android-checks").apply { mkdirs() }
+                    instrumentation.uiAutomation.takeScreenshot().let { bitmap ->
+                        File(screenshots, "download-progress.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                        bitmap.recycle()
+                    }
                     scenario.recreate()
                     scenario.onActivity { assertFalse(it.isFinishing) }
                     delay(2_000)
                     releaseBody.countDown()
                     withTimeout(60_000) {
-                        while (VideoDownloadManager.downloadStatus[downloadId] != VideoDownloadManager.DownloadType.IsDone) delay(100)
+                        while (CloudStreamApp.getKey<DownloadObjects.DownloadedFileInfo>(VideoDownloadManager.KEY_DOWNLOAD_INFO, downloadId.toString())?.displayName == activeInfo?.displayName) delay(100)
                     }
                     val file = directory.walkTopDown().single { it.isFile }
                     assertTracks(file, 1920, 1080)
@@ -365,6 +383,30 @@ class AdaptiveDownloadTest {
                 APIHolder.removePluginMapping(provider)
                 CloudStreamApp.removeKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString())
                 preferences.edit().apply { if (previous == null) remove(pathKey) else putString(pathKey, previous) }.commit()
+                directory.deleteRecursively()
+            }
+        }
+    }
+
+    @Test fun stoppingAReplacementKeepsThePreviouslyCompletedFileAndRecord() = runBlocking<Unit> {
+        FixtureServer().use { server ->
+            val directory = File(context.getExternalFilesDir(null), "adaptive-previous-${System.nanoTime()}").apply { mkdirs() }
+            val file = File(directory, "completed.webm").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+            val id = 987654323
+            val previous = DownloadObjects.DownloadedFileInfo(file.length(), "", file.name, basePath = directory.absolutePath)
+            CloudStreamApp.setKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString(), previous)
+            try {
+                val link = newExtractorLink("Fixture", "Studio B", "${server.origin}/dash/manifest.mpd", ExtractorLinkType.DASH)
+                val result = AdaptiveDownload.download(context, link, null, "Replacement", "", id) { state ->
+                    if (state.type == VideoDownloadManager.DownloadType.IsDownloading) {
+                        VideoDownloadManager.downloadEvent(id to VideoDownloadManager.DownloadActionType.Stop)
+                    }
+                }
+                assertTrue(result.success)
+                assertEquals(previous, CloudStreamApp.getKey<DownloadObjects.DownloadedFileInfo>(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString()))
+                assertArrayEquals(byteArrayOf(1, 2, 3, 4), file.readBytes())
+            } finally {
+                CloudStreamApp.removeKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString())
                 directory.deleteRecursively()
             }
         }

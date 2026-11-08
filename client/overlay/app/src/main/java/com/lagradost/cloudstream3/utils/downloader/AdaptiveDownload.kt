@@ -1,6 +1,7 @@
 package com.lagradost.cloudstream3.utils.downloader
 
 import android.content.Context
+import com.lagradost.cloudstream3.CloudStreamApp
 import android.media.metrics.LogSessionId
 import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
@@ -173,12 +174,15 @@ object AdaptiveDownload {
     ): DownloadStatus = withContext(Dispatchers.Main.immediate) {
         val directory = File(context.filesDir, "adaptive-downloads").apply { mkdirs() }
         val output = File.createTempFile("$id-", ".mp4", directory)
+        val previousInfo = CloudStreamApp.getKey<DownloadedFileInfo>(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString())
         val metadata = DownloadMetaData(id = id, linkHash = link.url.hashCode(), createNotificationCallback = callback, isHLS = true)
         var destination: DownloadObjects.StreamData? = null
         var complete = false
         var extension = "mp4"
         try {
             metadata.hlsTotal = 100
+            // Index the private export while it is active; publish the chosen destination only on success.
+            metadata.setDownloadFileInfoTemplate(DownloadedFileInfo(0, "", output.name, basePath = directory.absolutePath))
             metadata.type = DownloadType.IsDownloading
             val interceptor = getApiFromNameNull(apiName)?.getVideoInterceptor(link)
                 ?: getApiFromNameNull(link.source)?.getVideoInterceptor(link)
@@ -190,7 +194,9 @@ object AdaptiveDownload {
                 isPaused = { metadata.type == DownloadType.IsPaused },
                 progress = { value ->
                     metadata.bytesDownloaded = output.length()
+                    metadata.bytesWritten = output.length()
                     metadata.hlsProgress = value * 98 / 100
+                    metadata.hlsWrittenProgress = metadata.hlsProgress
                     metadata.type = metadata.type
                 }, container = { extension = it })
             if (!exported) return@withContext DownloadStatus(false, false, true)
@@ -244,7 +250,13 @@ object AdaptiveDownload {
                 try {
                     if (!complete) destination?.delete()
                     output.delete()
-                } finally { metadata.close() }
+                } finally {
+                    metadata.close()
+                    if (!complete) {
+                        if (previousInfo == null) CloudStreamApp.removeKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString())
+                        else CloudStreamApp.setKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString(), previousInfo)
+                    }
+                }
             }
         }
     }
