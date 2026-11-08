@@ -4,6 +4,8 @@ checkout=$(realpath "${1:?CloudStream checkout is required}")
 results="$checkout/android-checks"
 android_api="${KADROGRAD_ANDROID_API:-35}"
 case "$android_api" in 30|35|36) ;; *) echo 'Unsupported Android API'; exit 1 ;; esac
+check_suite="${KADROGRAD_CHECK_SUITE:-all}"
+case "$check_suite" in all|ui|home) ;; *) echo 'Unsupported check suite'; exit 1 ;; esac
 mkdir -p "$results"
 logcat_pid=''
 cleanup() {
@@ -52,6 +54,23 @@ adb install -r "$test_apk"
 if [ -n "${KADROGRAD_UPGRADE_FROM:-}" ]; then
   adb shell am instrument -w -r -e class 'com.lagradost.cloudstream3.UpgradeStateTest#assertAfterUpgrade' ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/upgrade-after.txt" || status=1
   grep -q 'OK (1 test)' "$results/upgrade-after.txt" || status=1
+fi
+if [ "$check_suite" != all ]; then
+  if [ "$check_suite" = ui ]; then
+    classes='com.lagradost.cloudstream3.AdaptiveDownloadTest,com.lagradost.cloudstream3.KadrogradHomeTest#sourcePickerListsAllBundledSourcesAndKeepsLaterFilterChanges'
+    expected='OK (9 tests)'
+  else
+    classes='com.lagradost.cloudstream3.KadrogradHomeTest#allBundledSourcesHaveAVisibleHeroAndPlayButton'
+    expected='OK (1 test)'
+  fi
+  timeout 300 adb shell am instrument -w -r -e class "$classes" ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/selected-instrumentation.txt" || status=1
+  grep -q "$expected" "$results/selected-instrumentation.txt" || status=1
+  if ! timeout 15 adb pull /sdcard/Android/data/ru.kadrograd.cloudstream/files/android-checks "$results/"; then
+    if adb root && timeout 20 adb wait-for-device; then
+      timeout 15 adb pull /sdcard/Android/data/ru.kadrograd.cloudstream/files/android-checks "$results/" || true
+    fi
+  fi
+  exit "$status"
 fi
 adb shell am instrument -w -r -e class com.lagradost.cloudstream3.AdaptiveDownloadTest ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/instrumentation.txt" || status=1
 grep -q 'OK (8 tests)' "$results/instrumentation.txt" || status=1

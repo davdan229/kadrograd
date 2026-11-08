@@ -44,6 +44,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 class AdaptiveDownloadTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
@@ -167,6 +168,11 @@ class AdaptiveDownloadTest {
                 }
             }
             var downloadId: Int? = null
+            val observedBytes = AtomicLong()
+            val progressListener: (Triple<Int, Long, Long>) -> Unit = { event ->
+                if (event.first == downloadId) observedBytes.set(event.second)
+            }
+            VideoDownloadManager.downloadProgressEvent += progressListener
             try {
                 ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                     withTimeout(30_000) {
@@ -198,11 +204,22 @@ class AdaptiveDownloadTest {
                     val activeInfo = CloudStreamApp.getKey<DownloadObjects.DownloadedFileInfo>(VideoDownloadManager.KEY_DOWNLOAD_INFO, downloadId.toString())
                     assertNotNull("The active download has no progress entry", activeInfo)
                     val notifications = context.getSystemService(NotificationManager::class.java)
-                    withTimeout(5_000) {
-                        while (notifications.activeNotifications.none {
-                            it.id == downloadId && it.notification.extras.getInt(Notification.EXTRA_PROGRESS_MAX) == 100 &&
-                                it.notification.extras.getInt(Notification.EXTRA_PROGRESS) in 1..98
-                        }) delay(100)
+                    withTimeout(5_000) { while (observedBytes.get() <= 0) delay(100) }
+                    try {
+                        withTimeout(5_000) {
+                            while (notifications.activeNotifications.none {
+                                val maximum = it.notification.extras.getInt(Notification.EXTRA_PROGRESS_MAX)
+                                val progress = it.notification.extras.getInt(Notification.EXTRA_PROGRESS)
+                                val indeterminate = it.notification.extras.getBoolean(Notification.EXTRA_PROGRESS_INDETERMINATE)
+                                it.id == downloadId && ((maximum > 0 && progress in 1 until maximum) || indeterminate)
+                            }) delay(100)
+                        }
+                    } finally {
+                        android.util.Log.i("KadrogradDownloadTest", "Notifications=${notifications.activeNotifications.map {
+                            listOf(it.id, it.notification.extras.getInt(Notification.EXTRA_PROGRESS),
+                                it.notification.extras.getInt(Notification.EXTRA_PROGRESS_MAX),
+                                it.notification.extras.getBoolean(Notification.EXTRA_PROGRESS_INDETERMINATE))
+                        }}; progress=${CloudStreamApp.getKey<DownloadObjects.DownloadedFileInfo>(VideoDownloadManager.KEY_DOWNLOAD_INFO, downloadId.toString())}")
                     }
                     val screenshots = File(context.getExternalFilesDir(null), "android-checks").apply { mkdirs() }
                     instrumentation.uiAutomation.takeScreenshot().let { bitmap ->
@@ -222,6 +239,7 @@ class AdaptiveDownloadTest {
                 }
             } finally {
                 releaseBody.countDown()
+                VideoDownloadManager.downloadProgressEvent -= progressListener
                 downloadId?.let { id ->
                     withContext(Dispatchers.Main.immediate) {
                         VideoDownloadManager.downloadEvent(id to VideoDownloadManager.DownloadActionType.Stop)
