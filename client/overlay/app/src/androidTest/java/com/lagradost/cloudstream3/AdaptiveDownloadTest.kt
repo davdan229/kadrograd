@@ -11,12 +11,15 @@ import android.widget.TextView
 import androidx.media3.ui.PlayerView
 import androidx.navigation.fragment.NavHostFragment
 import androidx.test.core.app.ActivityScenario
-import androidx.test.espresso.Espresso.onData
 import androidx.test.espresso.Espresso.onView
+import androidx.test.espresso.NoMatchingViewException
 import androidx.test.espresso.action.ViewActions.click
+import androidx.test.espresso.action.ViewActions.swipeDown
+import androidx.test.espresso.action.ViewActions.swipeUp
 import androidx.test.espresso.matcher.RootMatchers.isDialog
 import androidx.test.espresso.assertion.ViewAssertions.matches
 import androidx.test.espresso.matcher.ViewMatchers.isDisplayed
+import androidx.test.espresso.matcher.ViewMatchers.isCompletelyDisplayed
 import androidx.test.espresso.matcher.ViewMatchers.withId
 import androidx.test.espresso.matcher.ViewMatchers.withText
 import androidx.preference.PreferenceManager
@@ -43,7 +46,6 @@ import org.junit.Assert.*
 import org.junit.Test
 import org.hamcrest.Matchers.allOf
 import org.hamcrest.Matchers.containsString
-import org.hamcrest.Matchers.instanceOf
 import java.io.File
 import java.net.ServerSocket
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -60,6 +62,22 @@ class AdaptiveDownloadTest {
     private fun shell(command: String) {
         ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(command))
             .use { it.readBytes() }
+    }
+
+    private fun revealChoice(label: String, towardEnd: Boolean = true) {
+        // AdapterDataLoaderAction can loop forever at an inset bottom-sheet edge.
+        // Real swipes keep the visibility check bounded and exercise the user gesture.
+        repeat(6) { attempt ->
+            try {
+                onView(allOf(withText(containsString(label)), isCompletelyDisplayed()))
+                    .inRoot(isDialog()).check(matches(isDisplayed()))
+                return
+            } catch (missing: NoMatchingViewException) {
+                if (attempt == 5) throw missing
+                onView(withId(R.id.listview1)).inRoot(isDialog())
+                    .perform(if (towardEnd) swipeUp() else swipeDown())
+            }
+        }
     }
 
     internal suspend fun playFromDownloadsOffline(expectedWidth: Int, expectedHeight: Int) {
@@ -263,16 +281,21 @@ class AdaptiveDownloadTest {
                         }
                     }
                     onView(withId(R.id.download_movie_button)).perform(click())
+                    onView(withId(R.id.listview1)).inRoot(isDialog()).check { view, error ->
+                        if (error != null) throw error
+                        val visible = android.graphics.Rect()
+                        view.getGlobalVisibleRect(visible)
+                        android.util.Log.i("KadrogradDownloadTest", "Choice list height=${view.height}, visible=$visible, bottomPadding=${view.paddingBottom}")
+                    }
                     // The movie button must show all choices before anything is queued.
-                    for (height in listOf(480, 720, 1080, 1440, 2160)) for (voice in listOf("Studio A", "Studio B")) {
+                    for (height in listOf(2160, 1440, 1080, 720, 480)) for (voice in listOf("Studio A", "Studio B")) {
                         android.util.Log.i("KadrogradDownloadTest", "Checking choice $voice $height")
-                        onData(allOf(instanceOf(String::class.java), containsString("$voice · $height")))
-                            .inRoot(isDialog()).inAdapterView(withId(R.id.listview1))
-                            .check(matches(isDisplayed()))
+                        revealChoice("$voice · $height")
                     }
                     assertTrue(VideoDownloadManager.currentDownloads.value.isEmpty())
-                    onData(allOf(instanceOf(String::class.java), containsString("Studio B · 1080")))
-                        .inRoot(isDialog()).inAdapterView(withId(R.id.listview1)).perform(click())
+                    revealChoice("Studio B · 1080", towardEnd = false)
+                    onView(allOf(withText(containsString("Studio B · 1080")), isCompletelyDisplayed()))
+                        .inRoot(isDialog()).perform(click())
                     withContext(Dispatchers.IO) { assertTrue("Queue service did not request video", waiting.await(20, TimeUnit.SECONDS)) }
                     downloadId = checkNotNull(DownloadQueueService.downloadInstances.value.singleOrNull()) {
                         "Queue entry disappeared: status=${VideoDownloadManager.downloadStatus}, files=${directory.walkTopDown().filter { it.isFile }.map { it.name }.toList()}"
