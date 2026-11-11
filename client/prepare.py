@@ -21,6 +21,7 @@ HASHES = {
     BASE + "ui/download/button/BaseFetchButton.kt": "aeeeb1d898cecbd41c547f4dae6e46807756fbb98a9aa5b1b4beb36fc4f5983f",
     BASE + "ui/download/button/DownloadButton.kt": "e27c51f8d32d0a9177869c4dc593f857a53a16a49e57d1315316f40e2fb9fc61",
     BASE + "ui/download/button/PieFetchButton.kt": "49262fe36f907a69ad590e1f8ff4591b8b6c25bc40308c74d614a81a45048a6f",
+    BASE + "ui/download/DownloadViewModel.kt": "952dcd894d809147abe8adcd448ff4036ea53980d34c98eb381371302319991c",
 }
 
 
@@ -86,6 +87,16 @@ dependencies {
     text = replace_once(text, """                builder.setProgress((total / 1000).toInt(), (progress / 1000).toInt(), false)""", """                if (total > 0) {
                     builder.setProgress((total / 1000).coerceAtLeast(1).toInt(), (progress / 1000).toInt(), false)
                 } else builder.setProgress(0, 0, true)""")
+    text = replace_once(text, """    fun getDownloadFileInfo(
+        context: Context,
+        id: Int,
+    ): DownloadedFileInfoResult? {
+        try {""", """    fun getDownloadFileInfo(
+        context: Context,
+        id: Int,
+    ): DownloadedFileInfoResult? {
+        AdaptiveDownload.activeFileInfo(id)?.let { return it }
+        try {""")
     text = replace_once(text, '                        "mp4",\n                        tryResume,',
         '                        if (link.url.toUri().lastPathSegment?.endsWith(".webm", ignoreCase = true) == true) "webm" else "mp4",\n                        tryResume,')
     text = replace_once(text, "            when (link.type) {\n                ExtractorLinkType.M3U8 -> {", """            if (link.type == ExtractorLinkType.DASH ||
@@ -96,6 +107,12 @@ dependencies {
                 ExtractorLinkType.M3U8 -> {""")
     changes[path] = replace_once(text, "        } catch (_: Throwable) {\n            return DOWNLOAD_FAILED\n        } finally {\n            extractorJob.cancel()",
         "        } catch (cancelled: CancellationException) {\n            throw cancelled\n        } catch (_: Throwable) {\n            return DOWNLOAD_FAILED\n        } finally {\n            extractorJob.cancel()")
+
+    path = BASE + "ui/download/DownloadViewModel.kt"
+    text = replace_once(changes[path], "            if (childFile.fileLength <= 1) return@forEach", """            if (childFile.fileLength <= 1 &&
+                com.lagradost.cloudstream3.utils.downloader.AdaptiveDownload.activeFileInfo(child.id) == null
+            ) return@forEach""")
+    changes[path] = replace_once(text, "            if (bytes <= 0 || downloads <= 0) {", "            if (downloads <= 0) {")
 
     path = BASE + "ui/download/button/BaseFetchButton.kt"
     text = replace_once(changes[path], "if (downloadedLength < 1024) 0 else maxOf(", "if (downloadedLength < 1024 || totalLength <= 0) 0 else maxOf(")

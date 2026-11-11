@@ -258,8 +258,9 @@ class AdaptiveDownloadTest {
                         "Queue entry disappeared: status=${VideoDownloadManager.downloadStatus}, files=${directory.walkTopDown().filter { it.isFile }.map { it.name }.toList()}"
                     }.downloadQueueWrapper.id
                     assertTrue(DownloadQueueService.isRunning)
-                    val activeInfo = CloudStreamApp.getKey<DownloadObjects.DownloadedFileInfo>(VideoDownloadManager.KEY_DOWNLOAD_INFO, downloadId.toString())
+                    val activeInfo = AdaptiveDownload.activeFileInfo(requireNotNull(downloadId))
                     assertNotNull("The active download has no progress entry", activeInfo)
+                    assertNull(CloudStreamApp.getKey<DownloadObjects.DownloadedFileInfo>(VideoDownloadManager.KEY_DOWNLOAD_INFO, downloadId.toString()))
                     val notifications = context.getSystemService(NotificationManager::class.java)
                     withTimeout(5_000) { while (observedBytes.get() <= 0) delay(100) }
                     withTimeout(5_000) {
@@ -302,7 +303,7 @@ class AdaptiveDownloadTest {
                     delay(2_000)
                     releaseBody.countDown()
                     withTimeout(60_000) {
-                        while (CloudStreamApp.getKey<DownloadObjects.DownloadedFileInfo>(VideoDownloadManager.KEY_DOWNLOAD_INFO, downloadId.toString())?.displayName == activeInfo?.displayName) delay(100)
+                        while (CloudStreamApp.getKey<DownloadObjects.DownloadedFileInfo>(VideoDownloadManager.KEY_DOWNLOAD_INFO, downloadId.toString()) == null) delay(100)
                     }
                     val file = directory.walkTopDown().single { it.isFile }
                     assertTracks(file, 1920, 1080)

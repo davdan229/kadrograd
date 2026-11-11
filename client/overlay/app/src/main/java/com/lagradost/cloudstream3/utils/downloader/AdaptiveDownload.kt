@@ -1,7 +1,7 @@
 package com.lagradost.cloudstream3.utils.downloader
 
 import android.content.Context
-import com.lagradost.cloudstream3.CloudStreamApp
+import android.net.Uri
 import android.os.SystemClock
 import android.media.metrics.LogSessionId
 import androidx.media3.common.Format
@@ -44,11 +44,15 @@ import java.io.File
 import java.io.IOException
 import java.io.InterruptedIOException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.coroutineContext
 
 /** Copies clear adaptive streams, preserving compressed audio and video samples. */
 object AdaptiveDownload {
+    private val activeFiles = ConcurrentHashMap<Int, DownloadObjects.DownloadedFileInfoResult>()
+
+    internal fun activeFileInfo(id: Int): DownloadObjects.DownloadedFileInfoResult? = activeFiles[id]
     @JvmStatic fun isSupported(): Boolean = true
 
     private class TransferGate {
@@ -195,16 +199,16 @@ object AdaptiveDownload {
     ): DownloadStatus = withContext(Dispatchers.Main.immediate) {
         val directory = File(context.filesDir, "adaptive-downloads").apply { mkdirs() }
         val output = File.createTempFile("$id-", ".mp4", directory)
-        val previousInfo = CloudStreamApp.getKey<DownloadedFileInfo>(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString())
         val metadata = DownloadMetaData(id = id, linkHash = link.url.hashCode(), createNotificationCallback = callback, isHLS = true)
+        val temporaryUri = Uri.fromFile(output)
         var destination: DownloadObjects.StreamData? = null
         var complete = false
         var extension = "mp4"
         try {
             metadata.hlsTotal = 100
             metadata.totalBytes = 0
-            // Index the private export while it is active; publish the chosen destination only on success.
-            metadata.setDownloadFileInfoTemplate(DownloadedFileInfo(0, "", output.name, basePath = directory.absolutePath))
+            // A running export must not replace the record for a previously saved copy.
+            activeFiles[id] = DownloadObjects.DownloadedFileInfoResult(0, 0, temporaryUri)
             metadata.type = DownloadType.IsDownloading
             val interceptor = getApiFromNameNull(apiName)?.getVideoInterceptor(link)
                 ?: getApiFromNameNull(link.source)?.getVideoInterceptor(link)
@@ -221,6 +225,7 @@ object AdaptiveDownload {
                     metadata.hlsWrittenProgress = metadata.hlsProgress
                     // Zero means an unknown total; never estimate a file size by dividing by 0%.
                     metadata.totalBytes = if (metadata.hlsProgress == 0) 0L else null
+                    activeFiles[id] = DownloadObjects.DownloadedFileInfoResult(bytes, metadata.approxTotalBytes, temporaryUri)
                     metadata.type = metadata.type
                 }, container = { extension = it })
             if (!exported) return@withContext DownloadStatus(false, false, true)
@@ -259,6 +264,7 @@ object AdaptiveDownload {
             metadata.hlsProgress = 100
             metadata.hlsWrittenProgress = 100
             metadata.setDownloadFileInfoTemplate(DownloadedFileInfo(length, folder, "$uniqueName.$extension", basePath = basePath))
+            activeFiles.remove(id)
             complete = true
             metadata.type = DownloadType.IsDone
             DownloadStatus(false, false, true)
@@ -275,11 +281,8 @@ object AdaptiveDownload {
                     if (!complete) destination?.delete()
                     output.delete()
                 } finally {
+                    activeFiles.remove(id)
                     metadata.close()
-                    if (!complete) {
-                        if (previousInfo == null) CloudStreamApp.removeKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString())
-                        else CloudStreamApp.setKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString(), previousInfo)
-                    }
                 }
             }
         }
