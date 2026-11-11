@@ -4,7 +4,12 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.app.Notification
 import android.app.NotificationManager
+import android.net.ConnectivityManager
+import android.os.ParcelFileDescriptor
 import android.view.View
+import android.widget.TextView
+import androidx.media3.ui.PlayerView
+import androidx.navigation.fragment.NavHostFragment
 import androidx.test.core.app.ActivityScenario
 import androidx.test.espresso.Espresso.onData
 import androidx.test.espresso.Espresso.onView
@@ -12,6 +17,7 @@ import androidx.test.espresso.action.ViewActions.click
 import androidx.test.espresso.assertion.ViewAssertions.matches
 import androidx.test.espresso.matcher.ViewMatchers.isDisplayed
 import androidx.test.espresso.matcher.ViewMatchers.withId
+import androidx.test.espresso.matcher.ViewMatchers.withText
 import androidx.preference.PreferenceManager
 import androidx.test.platform.app.InstrumentationRegistry
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
@@ -49,6 +55,57 @@ import java.util.concurrent.atomic.AtomicLong
 class AdaptiveDownloadTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
     private val context get() = instrumentation.targetContext
+
+    private fun shell(command: String) {
+        ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(command))
+            .use { it.readBytes() }
+    }
+
+    private suspend fun playFromDownloadsOffline(expectedWidth: Int, expectedHeight: Int) {
+        val connectivity = context.getSystemService(ConnectivityManager::class.java)
+        try {
+            shell("cmd connectivity airplane-mode enable")
+            shell("svc wifi disable")
+            shell("svc data disable")
+            withTimeout(10_000) { while (connectivity.activeNetwork != null) delay(100) }
+            ActivityScenario.launch(MainActivity::class.java).use { offline ->
+                offline.onActivity { activity ->
+                    val nav = activity.supportFragmentManager.findFragmentById(R.id.nav_host_fragment) as NavHostFragment
+                    nav.navController.navigate(R.id.navigation_downloads)
+                }
+                withTimeout(20_000) {
+                    while (true) {
+                        var listed = false
+                        offline.onActivity {
+                            val title = it.findViewById<TextView>(R.id.download_header_title)
+                            listed = title?.isShown == true && title.text.toString() == "Download fixture"
+                        }
+                        if (listed) break
+                        delay(100)
+                    }
+                }
+                onView(allOf(withId(R.id.download_header_title), withText("Download fixture"))).perform(click())
+                withTimeout(20_000) {
+                    while (true) {
+                        var playing = false
+                        offline.onActivity {
+                            val player = it.findViewById<PlayerView>(R.id.player_view)?.player
+                            player?.playerError?.let { error -> throw AssertionError("Offline playback failed", error) }
+                            playing = player != null && player.currentPosition > 0 &&
+                                player.videoSize.width == expectedWidth && player.videoSize.height == expectedHeight
+                        }
+                        if (playing) break
+                        delay(100)
+                    }
+                }
+                assertNull(connectivity.activeNetwork)
+            }
+        } finally {
+            shell("cmd connectivity airplane-mode disable")
+            shell("svc wifi enable")
+            shell("svc data enable")
+        }
+    }
 
     /** Local HTTP verifies that every manifest/segment uses the provider's request interceptor. */
     private inner class FixtureServer(private val beforeBody: (String) -> Unit = {}) : AutoCloseable {
@@ -205,6 +262,20 @@ class AdaptiveDownloadTest {
                     assertNotNull("The active download has no progress entry", activeInfo)
                     val notifications = context.getSystemService(NotificationManager::class.java)
                     withTimeout(5_000) { while (observedBytes.get() <= 0) delay(100) }
+                    withTimeout(5_000) {
+                        while (true) {
+                            var text: CharSequence? = null
+                            scenario.onActivity {
+                                val label = it.findViewById<TextView>(R.id.result_movie_download_text_precentage)
+                                if (label?.isShown == true) text = label.text
+                            }
+                            if (!text.isNullOrBlank()) {
+                                assertNotEquals("100%", text.toString())
+                                break
+                            }
+                            delay(100)
+                        }
+                    }
                     try {
                         withTimeout(5_000) {
                             while (notifications.activeNotifications.none {
@@ -237,6 +308,9 @@ class AdaptiveDownloadTest {
                     assertTracks(file, 1920, 1080)
                     scenario.onActivity { assertFalse(it.isFinishing) }
                 }
+                val requestsBeforeOffline = server.requests.size
+                playFromDownloadsOffline(1920, 1080)
+                assertEquals(requestsBeforeOffline, server.requests.size)
             } finally {
                 releaseBody.countDown()
                 VideoDownloadManager.downloadProgressEvent -= progressListener

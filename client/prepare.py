@@ -18,6 +18,9 @@ HASHES = {
     BASE + "ui/result/EpisodeAdapter.kt": "b377967f8b5663a3949836af46773cec8f83ef52c9cfb184de042c0626143f9e",
     BASE + "ui/result/ResultFragmentPhone.kt": "f6dabd385895cb88f3201f632c413d337a4d72289b7f7d28bf87d9ffbe1967a1",
     BASE + "ui/result/ResultViewModel2.kt": "9a44eb8865d9dca08302751d6a36b651181bb848f2507ecf85570a933e37f4d5",
+    BASE + "ui/download/button/BaseFetchButton.kt": "aeeeb1d898cecbd41c547f4dae6e46807756fbb98a9aa5b1b4beb36fc4f5983f",
+    BASE + "ui/download/button/DownloadButton.kt": "e27c51f8d32d0a9177869c4dc593f857a53a16a49e57d1315316f40e2fb9fc61",
+    BASE + "ui/download/button/PieFetchButton.kt": "49262fe36f907a69ad590e1f8ff4591b8b6c25bc40308c74d614a81a45048a6f",
 }
 
 
@@ -93,6 +96,52 @@ dependencies {
                 ExtractorLinkType.M3U8 -> {""")
     changes[path] = replace_once(text, "        } catch (_: Throwable) {\n            return DOWNLOAD_FAILED\n        } finally {\n            extractorJob.cancel()",
         "        } catch (cancelled: CancellationException) {\n            throw cancelled\n        } catch (_: Throwable) {\n            return DOWNLOAD_FAILED\n        } finally {\n            extractorJob.cancel()")
+
+    path = BASE + "ui/download/button/BaseFetchButton.kt"
+    text = replace_once(changes[path], "if (downloadedLength < 1024) 0 else maxOf(", "if (downloadedLength < 1024 || totalLength <= 0) 0 else maxOf(")
+    text = replace_once(text, "downloadedBytes > 1024L && downloadedBytes + 1024L >= totalBytes", "totalBytes > 0 && downloadedBytes > 1024L && downloadedBytes + 1024L >= totalBytes")
+    text = replace_once(text, """        progressBar.post {
+            val steps = 10000L""", """        progressBar.post {
+            val unknownTotal = totalBytes <= 0 && downloadedBytes > 0
+            progressBar.isIndeterminate = unknownTotal
+            if (unknownTotal) {
+                progressBar.clearAnimation()
+                if (doSetProgress) progressText?.text = formatShortFileSize(context, downloadedBytes)
+                return@post
+            }
+            val steps = 10000L""")
+    changes[path] = text
+
+    path = BASE + "ui/download/button/PieFetchButton.kt"
+    changes[path] = replace_once(changes[path], "(metadata.downloadedLength > 1024 && metadata.downloadedLength + 1024 >= metadata.totalLength)", "(metadata.totalLength > 0 && metadata.downloadedLength > 1024 && metadata.downloadedLength + 1024 >= metadata.totalLength)")
+
+    path = BASE + "ui/download/button/DownloadButton.kt"
+    text = replace_once(changes[path], "            textView,\n            card,", "            textView ?: findViewById(R.id.result_movie_download_text_precentage),\n            card,")
+    changes[path] = replace_once(text, """        val isVis = metadata.progressPercentage > 0
+        progressText?.isVisible = isVis
+        if (isVis)
+            progressText?.text = "${metadata.progressPercentage}%"
+    }""", """        updateProgressText(metadata.downloadedLength, metadata.totalLength)
+    }
+
+    override fun setProgress(downloadedBytes: Long, totalBytes: Long) {
+        super.setProgress(downloadedBytes, totalBytes)
+        updateProgressText(downloadedBytes, totalBytes)
+    }
+
+    private fun updateProgressText(downloadedBytes: Long, totalBytes: Long) {
+        progressText?.post {
+            val view = progressText ?: return@post
+            view.isVisible = downloadedBytes > 0 && currentMetaData.status in setOf(
+                DownloadStatusTell.IsDownloading, DownloadStatusTell.IsPaused
+            )
+            if (view.isVisible) {
+                view.text = if (totalBytes > 0) {
+                    "${(100.0 * downloadedBytes / totalBytes).toInt().coerceIn(0, 99)}%"
+                } else android.text.format.Formatter.formatShortFileSize(context, downloadedBytes)
+            }
+        }
+    }""")
 
     # This fork has another package and signing certificate; upstream APKs cannot update it.
     path = BASE + "utils/InAppUpdater.kt"
