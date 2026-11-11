@@ -13,9 +13,12 @@ import androidx.navigation.fragment.NavHostFragment
 import androidx.test.core.app.ActivityScenario
 import androidx.test.espresso.Espresso.onView
 import androidx.test.espresso.NoMatchingViewException
+import androidx.test.espresso.UiController
+import androidx.test.espresso.ViewAction
+import androidx.test.espresso.action.GeneralSwipeAction
+import androidx.test.espresso.action.Press
+import androidx.test.espresso.action.Swipe
 import androidx.test.espresso.action.ViewActions.click
-import androidx.test.espresso.action.ViewActions.swipeDown
-import androidx.test.espresso.action.ViewActions.swipeUp
 import androidx.test.espresso.matcher.RootMatchers.isDialog
 import androidx.test.espresso.assertion.ViewAssertions.matches
 import androidx.test.espresso.matcher.ViewMatchers.isDisplayed
@@ -75,7 +78,20 @@ class AdaptiveDownloadTest {
             } catch (missing: NoMatchingViewException) {
                 if (attempt == 5) throw missing
                 onView(withId(R.id.listview1)).inRoot(isDialog())
-                    .perform(if (towardEnd) swipeUp() else swipeDown())
+                    .perform(object : ViewAction {
+                        override fun getDescription() = "Swipe inside the visible part of the choice sheet"
+                        override fun getConstraints() = isDisplayed()
+                        override fun perform(controller: UiController, view: View) {
+                            val bounds = android.graphics.Rect()
+                            check(view.getGlobalVisibleRect(bounds) && bounds.height() > 100)
+                            val top = bounds.top + bounds.height() * 0.15f
+                            val bottom = bounds.bottom - bounds.height() * 0.15f
+                            GeneralSwipeAction(Swipe.FAST,
+                                { floatArrayOf(bounds.exactCenterX(), if (towardEnd) bottom else top) },
+                                { floatArrayOf(bounds.exactCenterX(), if (towardEnd) top else bottom) },
+                                Press.FINGER).perform(controller, view)
+                        }
+                    })
             }
         }
     }
