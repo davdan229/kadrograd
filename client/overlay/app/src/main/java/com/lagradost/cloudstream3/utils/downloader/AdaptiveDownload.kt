@@ -205,7 +205,7 @@ object AdaptiveDownload {
         var complete = false
         var extension = "mp4"
         try {
-            metadata.hlsTotal = 100
+            metadata.hlsTotal = null
             metadata.totalBytes = 0
             // A running export must not replace the record for a previously saved copy.
             activeFiles[id] = DownloadObjects.DownloadedFileInfoResult(0, 0, temporaryUri)
@@ -222,6 +222,7 @@ object AdaptiveDownload {
                     metadata.bytesDownloaded = bytes
                     metadata.bytesWritten = output.length()
                     metadata.hlsProgress = if (value > 0) (value * 98 / 100).coerceAtLeast(1) else 0
+                    metadata.hlsTotal = if (metadata.hlsProgress > 0) 100 else null
                     metadata.hlsWrittenProgress = metadata.hlsProgress
                     // Zero means an unknown total; never estimate a file size by dividing by 0%.
                     metadata.totalBytes = if (metadata.hlsProgress == 0) 0L else null
@@ -233,6 +234,7 @@ object AdaptiveDownload {
             requireNotNull(baseFile) { "Download folder is unavailable" }
             val length = output.length()
             metadata.totalBytes = length
+            metadata.hlsTotal = 100
             metadata.hlsProgress = 99
             // A unique destination keeps any existing completed download intact until this one succeeds.
             val uniqueName = "$name [$id-${System.currentTimeMillis()}]"

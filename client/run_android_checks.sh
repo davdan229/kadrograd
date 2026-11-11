@@ -50,6 +50,7 @@ if [ -n "${KADROGRAD_UPGRADE_FROM:-}" ]; then
 fi
 adb install -r -g "$checkout/app/build/outputs/apk/stable/release/app-stable-release.apk"
 adb shell appops set ru.kadrograd.cloudstream MANAGE_EXTERNAL_STORAGE allow
+adb shell dumpsys deviceidle whitelist +ru.kadrograd.cloudstream
 adb install -r "$test_apk"
 if [ -n "${KADROGRAD_UPGRADE_FROM:-}" ]; then
   adb shell am instrument -w -r -e class 'com.lagradost.cloudstream3.UpgradeStateTest#assertAfterUpgrade' ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/upgrade-after.txt" || status=1

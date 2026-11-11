@@ -87,6 +87,14 @@ dependencies {
     text = replace_once(text, """                builder.setProgress((total / 1000).toInt(), (progress / 1000).toInt(), false)""", """                if (total > 0) {
                     builder.setProgress((total / 1000).coerceAtLeast(1).toInt(), (progress / 1000).toInt(), false)
                 } else builder.setProgress(0, 0, true)""")
+    text = replace_once(text, "                    progressPercentage = progress * 100 / total", "                    progressPercentage = if (total > 0) progress * 100 / total else 0")
+    text = replace_once(text, '                        " ($mbFormat/s)".format(bytesPerSecond.toFloat() / 1000000f)',
+        '                        " (" + context.getString(R.string.kadrograd_download_speed_format, android.text.format.Formatter.formatShortFileSize(context, bytesPerSecond.coerceAtLeast(0))) + ")"')
+    text = replace_once(text, """                            (if (linkName == null) "" else "$linkName\\n") + "$rowTwo\\n$progressPercentage % ($progressMbString/$totalMbString)$suffix$mbPerSecondString $remainingTime" """.rstrip(),
+        """                            (if (linkName == null) "" else "$linkName\\n") +
+                                if (total <= 0 && hlsTotal == null) {
+                                    "$rowTwo\\n" + android.text.format.Formatter.formatShortFileSize(context, progress) + mbPerSecondString
+                                } else "$rowTwo\\n$progressPercentage % ($progressMbString/$totalMbString)$suffix$mbPerSecondString $remainingTime" """.rstrip())
     text = replace_once(text, """    fun getDownloadFileInfo(
         context: Context,
         id: Int,
@@ -268,7 +276,7 @@ dependencies {
         import re
         label = "CloudStream"
         text = re.sub(r'(<string name="app_name">)[^<]*(</string>)', rf'\g<1>{label}\g<2>', text)
-        picker = "Выбрать качество и озвучку" if path.parent.name == "values-ru" else "Choose quality and voice"
+        picker = "Выбрать качество и озвучку" if path.parent.name in {"values-ru", "values-b+ru"} else "Choose quality and voice"
         text = re.sub(r'(<string name="episode_action_download_mirror">)[^<]*(</string>)', rf'\g<1>{picker}\g<2>', text)
         path.write_text(text, encoding="utf-8", newline="\n")
     marker.write_text(json.dumps({p: hashlib.sha256((root / p).read_bytes()).hexdigest() for p in HASHES}, indent=2))
