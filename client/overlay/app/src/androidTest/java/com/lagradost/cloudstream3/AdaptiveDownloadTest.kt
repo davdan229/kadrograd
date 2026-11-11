@@ -283,9 +283,7 @@ class AdaptiveDownloadTest {
                                 val maximum = it.notification.extras.getInt(Notification.EXTRA_PROGRESS_MAX)
                                 val progress = it.notification.extras.getInt(Notification.EXTRA_PROGRESS)
                                 val indeterminate = it.notification.extras.getBoolean(Notification.EXTRA_PROGRESS_INDETERMINATE)
-                                val text = it.notification.extras.getCharSequence(Notification.EXTRA_BIG_TEXT).toString()
-                                it.id == downloadId && text.contains(context.getString(R.string.kadrograd_download_speed_format, "")) &&
-                                    ((maximum > 0 && progress in 1 until maximum) || indeterminate)
+                                it.id == downloadId && ((maximum > 0 && progress in 1 until maximum) || indeterminate)
                             }) delay(100)
                         }
                     } finally {

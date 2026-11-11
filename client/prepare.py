@@ -88,8 +88,6 @@ dependencies {
                     builder.setProgress((total / 1000).coerceAtLeast(1).toInt(), (progress / 1000).toInt(), false)
                 } else builder.setProgress(0, 0, true)""")
     text = replace_once(text, "                    progressPercentage = progress * 100 / total", "                    progressPercentage = if (total > 0) progress * 100 / total else 0")
-    text = replace_once(text, '                        " ($mbFormat/s)".format(bytesPerSecond.toFloat() / 1000000f)',
-        '                        " (" + context.getString(R.string.kadrograd_download_speed_format, android.text.format.Formatter.formatShortFileSize(context, bytesPerSecond.coerceAtLeast(0))) + ")"')
     text = replace_once(text, """                            (if (linkName == null) "" else "$linkName\\n") + "$rowTwo\\n$progressPercentage % ($progressMbString/$totalMbString)$suffix$mbPerSecondString $remainingTime" """.rstrip(),
         """                            (if (linkName == null) "" else "$linkName\\n") +
                                 if (total <= 0 && hlsTotal == null) {
