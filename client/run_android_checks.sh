@@ -10,6 +10,7 @@ mkdir -p "$results"
 logcat_pid=''
 cleanup() {
   if [ -n "$logcat_pid" ]; then kill "$logcat_pid" 2>/dev/null || true; fi
+  timeout 10 adb logcat -d -v threadtime -t 4000 >> "$results/logcat.txt" 2>&1 || true
   timeout 10 adb emu kill >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -36,7 +37,8 @@ for attempt in $(seq 1 120); do
 done
 test "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1
 adb shell input keyevent 82
-adb logcat -v threadtime > "$results/logcat.txt" 2>&1 &
+adb logcat -c
+adb logcat -v threadtime '*:W' 'TestRunner:I' 'KadrogradDownloadTest:I' > "$results/logcat.txt" 2>&1 &
 logcat_pid=$!
 status=0
 test_apk="$checkout/app/build/outputs/apk/androidTest/stable/release/app-stable-release-androidTest.apk"
@@ -66,6 +68,14 @@ if [ "$check_suite" != all ]; then
   fi
   timeout 300 adb shell am instrument -w -r -e class "$classes" ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/selected-instrumentation.txt" || status=1
   grep -q "$expected" "$results/selected-instrumentation.txt" || status=1
+  if [ "$status" != 0 ]; then
+    timeout 10 adb shell dumpsys activity lastanr > "$results/last-anr.txt" 2>&1 || true
+    timeout 10 adb shell dumpsys activity activities > "$results/activities.txt" 2>&1 || true
+    timeout 10 adb shell 'kill -3 $(pidof ru.kadrograd.cloudstream)' || true
+    if adb root && timeout 20 adb wait-for-device; then
+      timeout 15 adb pull /data/anr "$results/anr" || true
+    fi
+  fi
   if ! timeout 15 adb pull /sdcard/Android/data/ru.kadrograd.cloudstream/files/android-checks "$results/"; then
     if adb root && timeout 20 adb wait-for-device; then
       timeout 15 adb pull /sdcard/Android/data/ru.kadrograd.cloudstream/files/android-checks "$results/" || true
