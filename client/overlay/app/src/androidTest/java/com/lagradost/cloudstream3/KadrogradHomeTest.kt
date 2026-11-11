@@ -16,14 +16,17 @@ import androidx.navigation.fragment.NavHostFragment
 import androidx.preference.PreferenceManager
 import androidx.test.core.app.ActivityScenario
 import androidx.test.espresso.Espresso.onData
+import androidx.test.espresso.Espresso.onView
 import androidx.test.espresso.action.ViewActions.click
+import androidx.test.espresso.matcher.RootMatchers.isDialog
+import androidx.test.espresso.matcher.ViewMatchers.isDisplayed
+import androidx.test.espresso.matcher.ViewMatchers.withId
 import androidx.test.platform.app.InstrumentationRegistry
 import com.lagradost.cloudstream3.APIHolder.getApiFromNameNull
 import com.lagradost.cloudstream3.mvvm.Resource
 import com.lagradost.cloudstream3.plugins.PluginManager
 import com.lagradost.cloudstream3.plugins.RepositoryManager
 import com.lagradost.cloudstream3.plugins.BundledSources
-import com.lagradost.cloudstream3.ui.home.HomeFragment.Companion.selectHomepage
 import com.lagradost.cloudstream3.ui.home.HomeViewModel
 import com.lagradost.cloudstream3.utils.DataStoreHelper
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -43,6 +46,8 @@ class KadrogradHomeTest {
     @Test fun sourcePickerListsAllBundledSourcesAndKeepsLaterFilterChanges() = runBlocking<Unit> {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         context.getSharedPreferences("rebuild_preference", 0).edit().putString("HAS_DONE_SETUP", "true").commit()
+        PreferenceManager.getDefaultSharedPreferences(context).edit()
+            .putInt("app_layout_key", 0).putBoolean("auto_update_plugins", false).commit()
         val settings = context.getSharedPreferences("kadrograd_client", 0)
         val previousTypes = DataStoreHelper.homePreference
         DataStoreHelper.homePreference = listOf(TvType.Movie, TvType.TvSeries)
@@ -51,14 +56,29 @@ class KadrogradHomeTest {
             BundledSources.prepare(context, PluginManager.getPluginsOnline())
             assertTrue(DataStoreHelper.homePreference.contains(TvType.Anime))
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                lateinit var model: HomeViewModel
+                scenario.onActivity { activity ->
+                    model = ViewModelProvider(activity)[HomeViewModel::class.java]
+                    val navHost = activity.supportFragmentManager.findFragmentById(R.id.nav_host_fragment) as NavHostFragment
+                    if (navHost.navController.currentDestination?.id != R.id.navigation_home) {
+                        navHost.navController.navigate(R.id.navigation_home)
+                    }
+                }
                 withTimeout(60_000) {
                     while (getApiFromNameNull("Кадроград · AnimeVost") == null) delay(100)
                 }
                 for (name in listOf("Кадроград · AnimeVost", "Кадроград · AniLibria", "Кадроград · Zona")) {
-                    val selected = CompletableDeferred<String>()
-                    scenario.onActivity { it.selectHomepage(null) { picked -> selected.complete(picked) } }
-                    onData(allOf(instanceOf(String::class.java), containsString(name))).perform(click())
-                    assertEquals(name, withTimeout(5_000) { selected.await() })
+                    onView(allOf(withId(R.id.home_api_fab), isDisplayed())).perform(click())
+                    onData(allOf(instanceOf(String::class.java), containsString(name)))
+                        .inRoot(isDialog()).inAdapterView(withId(R.id.listview1)).perform(click())
+                    withTimeout(10_000) {
+                        while (true) {
+                            var selected = false
+                            scenario.onActivity { selected = model.apiName.value == name }
+                            if (selected) break
+                            delay(100)
+                        }
+                    }
                 }
                 DataStoreHelper.homePreference = listOf(TvType.Movie)
                 BundledSources.prepare(context, PluginManager.getPluginsOnline())
