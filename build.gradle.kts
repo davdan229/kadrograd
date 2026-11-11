@@ -2,6 +2,7 @@ import com.android.build.gradle.BaseExtension
 import com.lagradost.cloudstream3.gradle.CloudstreamExtension
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile
+import org.gradle.api.tasks.testing.Test
 
 buildscript {
     repositories { google(); mavenCentral(); maven("https://jitpack.io") }
@@ -34,6 +35,12 @@ subprojects {
         compilerOptions {
             jvmTarget.set(JvmTarget.JVM_11)
             freeCompilerArgs.addAll("-Xno-call-assertions", "-Xno-param-assertions", "-Xno-receiver-assertions", "-Xannotation-default-target=param-property")
+        }
+    }
+    if (project.hasProperty("liveSources")) {
+        tasks.withType<Test>().configureEach {
+            outputs.upToDateWhen { false }
+            outputs.doNotCacheIf("Live checks depend on current source responses") { true }
         }
     }
     dependencies {
