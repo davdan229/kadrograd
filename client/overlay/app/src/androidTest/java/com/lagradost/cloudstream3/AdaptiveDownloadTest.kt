@@ -14,6 +14,7 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.espresso.Espresso.onData
 import androidx.test.espresso.Espresso.onView
 import androidx.test.espresso.action.ViewActions.click
+import androidx.test.espresso.matcher.RootMatchers.isDialog
 import androidx.test.espresso.assertion.ViewAssertions.matches
 import androidx.test.espresso.matcher.ViewMatchers.isDisplayed
 import androidx.test.espresso.matcher.ViewMatchers.withId
@@ -230,6 +231,21 @@ class AdaptiveDownloadTest {
                 if (event.first == downloadId) observedBytes.set(event.second)
             }
             VideoDownloadManager.downloadProgressEvent += progressListener
+            val finished = CountDownLatch(1)
+            kotlin.concurrent.thread(name = "download-ui-watchdog", isDaemon = true) {
+                if (!finished.await(45, TimeUnit.SECONDS)) {
+                    Thread.getAllStackTraces().forEach { (thread, trace) ->
+                        android.util.Log.w("KadrogradDownloadTest", "${thread.name} ${thread.state}\n${trace.joinToString("\n")}")
+                    }
+                    val screenshots = File(context.getExternalFilesDir(null), "android-checks").apply { mkdirs() }
+                    instrumentation.uiAutomation.takeScreenshot()?.let { bitmap ->
+                        File(screenshots, "download-ui-stalled.png").outputStream().use {
+                            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+                        }
+                        bitmap.recycle()
+                    }
+                }
+            }
             try {
                 ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                     withTimeout(30_000) {
@@ -248,11 +264,14 @@ class AdaptiveDownloadTest {
                     onView(withId(R.id.download_movie_button)).perform(click())
                     // The movie button must show all choices before anything is queued.
                     for (height in listOf(480, 720, 1080, 1440, 2160)) for (voice in listOf("Studio A", "Studio B")) {
+                        android.util.Log.i("KadrogradDownloadTest", "Checking choice $voice $height")
                         onData(allOf(instanceOf(String::class.java), containsString("$voice · $height")))
+                            .inRoot(isDialog()).inAdapterView(withId(R.id.listview1))
                             .check(matches(isDisplayed()))
                     }
                     assertTrue(VideoDownloadManager.currentDownloads.value.isEmpty())
-                    onData(allOf(instanceOf(String::class.java), containsString("Studio B · 1080"))).perform(click())
+                    onData(allOf(instanceOf(String::class.java), containsString("Studio B · 1080")))
+                        .inRoot(isDialog()).inAdapterView(withId(R.id.listview1)).perform(click())
                     withContext(Dispatchers.IO) { assertTrue("Queue service did not request video", waiting.await(20, TimeUnit.SECONDS)) }
                     downloadId = checkNotNull(DownloadQueueService.downloadInstances.value.singleOrNull()) {
                         "Queue entry disappeared: status=${VideoDownloadManager.downloadStatus}, files=${directory.walkTopDown().filter { it.isFile }.map { it.name }.toList()}"
@@ -313,6 +332,7 @@ class AdaptiveDownloadTest {
                 playFromDownloadsOffline(1920, 1080)
                 assertEquals(requestsBeforeOffline, server.requests.size)
             } finally {
+                finished.countDown()
                 releaseBody.countDown()
                 VideoDownloadManager.downloadProgressEvent -= progressListener
                 downloadId?.let { id ->
