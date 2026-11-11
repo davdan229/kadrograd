@@ -62,7 +62,7 @@ class AdaptiveDownloadTest {
             .use { it.readBytes() }
     }
 
-    private suspend fun playFromDownloadsOffline(expectedWidth: Int, expectedHeight: Int) {
+    internal suspend fun playFromDownloadsOffline(expectedWidth: Int, expectedHeight: Int) {
         val connectivity = context.getSystemService(ConnectivityManager::class.java)
         try {
             shell("cmd connectivity airplane-mode enable")
@@ -226,6 +226,7 @@ class AdaptiveDownloadTest {
                 }
             }
             var downloadId: Int? = null
+            var keepCompletedFile = false
             val observedBytes = AtomicLong()
             val progressListener: (Triple<Int, Long, Long>) -> Unit = { event ->
                 if (event.first == downloadId) observedBytes.set(event.second)
@@ -331,6 +332,13 @@ class AdaptiveDownloadTest {
                 val requestsBeforeOffline = server.requests.size
                 playFromDownloadsOffline(1920, 1080)
                 assertEquals(requestsBeforeOffline, server.requests.size)
+                if (InstrumentationRegistry.getArguments().getString("keepOfflineFixture") == "true") {
+                    assertTrue(context.getSharedPreferences("kadrograd_offline_check", 0).edit()
+                        .putInt("pid", android.os.Process.myPid())
+                        .putInt("download_id", requireNotNull(downloadId))
+                        .putString("directory", directory.absolutePath).commit())
+                    keepCompletedFile = true
+                }
             } finally {
                 finished.countDown()
                 releaseBody.countDown()
@@ -339,11 +347,11 @@ class AdaptiveDownloadTest {
                     withContext(Dispatchers.Main.immediate) {
                         VideoDownloadManager.downloadEvent(id to VideoDownloadManager.DownloadActionType.Stop)
                     }
-                    CloudStreamApp.removeKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString())
+                    if (!keepCompletedFile) CloudStreamApp.removeKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString())
                 }
                 APIHolder.removePluginMapping(provider)
                 preferences.edit().apply { if (previous == null) remove(pathKey) else putString(pathKey, previous) }.commit()
-                directory.deleteRecursively()
+                if (!keepCompletedFile) directory.deleteRecursively()
             }
         }
     }
