@@ -1,6 +1,8 @@
 package com.lagradost.cloudstream3.utils.downloader
 
 import android.content.Context
+import android.net.Uri
+import android.os.SystemClock
 import android.media.metrics.LogSessionId
 import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
@@ -9,6 +11,7 @@ import androidx.media3.common.util.Clock
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.TransferListener
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.transformer.Codec
@@ -41,10 +44,15 @@ import java.io.File
 import java.io.IOException
 import java.io.InterruptedIOException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.coroutineContext
 
 /** Copies clear adaptive streams, preserving compressed audio and video samples. */
 object AdaptiveDownload {
+    private val activeFiles = ConcurrentHashMap<Int, DownloadObjects.DownloadedFileInfoResult>()
+
+    internal fun activeFileInfo(id: Int): DownloadObjects.DownloadedFileInfoResult? = activeFiles[id]
     @JvmStatic fun isSupported(): Boolean = true
 
     private class TransferGate {
@@ -102,7 +110,7 @@ object AdaptiveDownload {
         interceptor: Interceptor?,
         keepRunning: () -> Boolean = { true },
         isPaused: () -> Boolean = { false },
-        progress: (Int) -> Unit = {},
+        progress: (Int, Long) -> Unit = { _, _ -> },
         container: (String) -> Unit = {},
     ): Boolean = withContext(Dispatchers.Main.immediate) {
         val client = OkHttpClient.Builder()
@@ -118,7 +126,18 @@ object AdaptiveDownload {
         val upstream = DefaultDataSource.Factory(context,
             OkHttpDataSource.Factory(client).setDefaultRequestProperties(headers))
         val gate = TransferGate().apply { pause(isPaused()) }
-        val dataSource = DataSource.Factory { PausableDataSource(upstream.createDataSource(), gate) }
+        val transferred = AtomicLong()
+        val transferListener = object : TransferListener {
+            override fun onTransferInitializing(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean) = Unit
+            override fun onTransferStart(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean) = Unit
+            override fun onTransferEnd(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean) = Unit
+            override fun onBytesTransferred(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean, bytesTransferred: Int) {
+                if (isNetwork) transferred.addAndGet(bytesTransferred.toLong())
+            }
+        }
+        val dataSource = DataSource.Factory {
+            PausableDataSource(upstream.createDataSource(), gate).apply { addTransferListener(transferListener) }
+        }
         val mediaSource = DefaultMediaSourceFactory(dataSource)
         val loader = ExoPlayerAssetLoader.Factory(context, DefaultDecoderFactory.Builder(context).build(), Clock.DEFAULT, mediaSource)
         val finished = CompletableDeferred<Unit>()
@@ -143,13 +162,20 @@ object AdaptiveDownload {
             transformer.start(item, output.absolutePath)
             val holder = ProgressHolder()
             var lastProgress = -1
+            var lastReport = 0L
             while (!finished.isCompleted) {
                 coroutineContext.ensureActive()
                 if (!keepRunning()) return@withContext false
                 gate.pause(isPaused())
-                if (!gate.paused && transformer.getProgress(holder) == Transformer.PROGRESS_STATE_AVAILABLE && holder.progress != lastProgress) {
-                    lastProgress = holder.progress
-                    progress(holder.progress.coerceIn(0, 99))
+                if (!gate.paused) {
+                    val available = transformer.getProgress(holder) == Transformer.PROGRESS_STATE_AVAILABLE
+                    val changed = available && holder.progress != lastProgress
+                    if (changed) lastProgress = holder.progress
+                    val now = SystemClock.elapsedRealtime()
+                    if (changed || now - lastReport >= 1_000) {
+                        lastReport = now
+                        progress(lastProgress.coerceIn(0, 99), transferred.get())
+                    }
                 }
                 delay(200)
             }
@@ -174,11 +200,15 @@ object AdaptiveDownload {
         val directory = File(context.filesDir, "adaptive-downloads").apply { mkdirs() }
         val output = File.createTempFile("$id-", ".mp4", directory)
         val metadata = DownloadMetaData(id = id, linkHash = link.url.hashCode(), createNotificationCallback = callback, isHLS = true)
+        val temporaryUri = Uri.fromFile(output)
         var destination: DownloadObjects.StreamData? = null
         var complete = false
         var extension = "mp4"
         try {
-            metadata.hlsTotal = 100
+            metadata.hlsTotal = null
+            metadata.totalBytes = 0
+            // A running export must not replace the record for a previously saved copy.
+            activeFiles[id] = DownloadObjects.DownloadedFileInfoResult(0, 0, temporaryUri)
             metadata.type = DownloadType.IsDownloading
             val interceptor = getApiFromNameNull(apiName)?.getVideoInterceptor(link)
                 ?: getApiFromNameNull(link.source)?.getVideoInterceptor(link)
@@ -188,9 +218,15 @@ object AdaptiveDownload {
             val exported = exportToFile(context, link, output, interceptor,
                 keepRunning = { metadata.type != DownloadType.IsStopped },
                 isPaused = { metadata.type == DownloadType.IsPaused },
-                progress = { value ->
-                    metadata.bytesDownloaded = output.length()
-                    metadata.hlsProgress = value * 98 / 100
+                progress = { value, bytes ->
+                    metadata.bytesDownloaded = bytes
+                    metadata.bytesWritten = output.length()
+                    metadata.hlsProgress = if (value > 0) (value * 98 / 100).coerceAtLeast(1) else 0
+                    metadata.hlsTotal = if (metadata.hlsProgress > 0) 100 else null
+                    metadata.hlsWrittenProgress = metadata.hlsProgress
+                    // Zero means an unknown total; never estimate a file size by dividing by 0%.
+                    metadata.totalBytes = if (metadata.hlsProgress == 0) 0L else null
+                    activeFiles[id] = DownloadObjects.DownloadedFileInfoResult(bytes, metadata.approxTotalBytes, temporaryUri)
                     metadata.type = metadata.type
                 }, container = { extension = it })
             if (!exported) return@withContext DownloadStatus(false, false, true)
@@ -198,6 +234,7 @@ object AdaptiveDownload {
             requireNotNull(baseFile) { "Download folder is unavailable" }
             val length = output.length()
             metadata.totalBytes = length
+            metadata.hlsTotal = 100
             metadata.hlsProgress = 99
             // A unique destination keeps any existing completed download intact until this one succeeds.
             val uniqueName = "$name [$id-${System.currentTimeMillis()}]"
@@ -229,6 +266,7 @@ object AdaptiveDownload {
             metadata.hlsProgress = 100
             metadata.hlsWrittenProgress = 100
             metadata.setDownloadFileInfoTemplate(DownloadedFileInfo(length, folder, "$uniqueName.$extension", basePath = basePath))
+            activeFiles.remove(id)
             complete = true
             metadata.type = DownloadType.IsDone
             DownloadStatus(false, false, true)
@@ -244,7 +282,10 @@ object AdaptiveDownload {
                 try {
                     if (!complete) destination?.delete()
                     output.delete()
-                } finally { metadata.close() }
+                } finally {
+                    activeFiles.remove(id)
+                    metadata.close()
+                }
             }
         }
     }

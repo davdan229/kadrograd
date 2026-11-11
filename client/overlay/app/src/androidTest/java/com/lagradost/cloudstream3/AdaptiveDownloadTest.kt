@@ -2,10 +2,36 @@ package com.lagradost.cloudstream3
 
 import android.media.MediaExtractor
 import android.media.MediaFormat
+import android.app.Notification
+import android.app.NotificationManager
+import android.net.ConnectivityManager
+import android.os.ParcelFileDescriptor
+import android.view.View
+import android.widget.TextView
+import androidx.media3.ui.PlayerView
+import androidx.navigation.fragment.NavHostFragment
+import androidx.test.core.app.ActivityScenario
+import androidx.test.espresso.Espresso.onView
+import androidx.test.espresso.NoMatchingViewException
+import androidx.test.espresso.UiController
+import androidx.test.espresso.ViewAction
+import androidx.test.espresso.action.GeneralSwipeAction
+import androidx.test.espresso.action.Press
+import androidx.test.espresso.action.Swipe
+import androidx.test.espresso.action.ViewActions.click
+import androidx.test.espresso.matcher.RootMatchers.isDialog
+import androidx.test.espresso.assertion.ViewAssertions.matches
+import androidx.test.espresso.matcher.ViewMatchers.isDisplayed
+import androidx.test.espresso.matcher.ViewMatchers.isCompletelyDisplayed
+import androidx.test.espresso.matcher.ViewMatchers.withId
+import androidx.test.espresso.matcher.ViewMatchers.withText
 import androidx.preference.PreferenceManager
 import androidx.test.platform.app.InstrumentationRegistry
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.AppContextUtils.loadResult
+import com.lagradost.cloudstream3.plugins.PluginManager
+import com.lagradost.cloudstream3.services.DownloadQueueService
 import com.lagradost.cloudstream3.utils.downloader.AdaptiveDownload
 import com.lagradost.cloudstream3.utils.downloader.DownloadObjects
 import com.lagradost.cloudstream3.utils.downloader.VideoDownloadManager
@@ -21,6 +47,8 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.*
 import org.junit.Test
+import org.hamcrest.Matchers.allOf
+import org.hamcrest.Matchers.containsString
 import java.io.File
 import java.net.ServerSocket
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -28,10 +56,91 @@ import java.util.concurrent.Executors
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 class AdaptiveDownloadTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
     private val context get() = instrumentation.targetContext
+
+    private fun shell(command: String) {
+        ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(command))
+            .use { it.readBytes() }
+    }
+
+    private fun revealChoice(label: String, towardEnd: Boolean = true) {
+        // AdapterDataLoaderAction can loop forever at an inset bottom-sheet edge.
+        // Real swipes keep the visibility check bounded and exercise the user gesture.
+        repeat(6) { attempt ->
+            try {
+                onView(allOf(withText(containsString(label)), isCompletelyDisplayed()))
+                    .inRoot(isDialog()).check(matches(isDisplayed()))
+                return
+            } catch (missing: NoMatchingViewException) {
+                if (attempt == 5) throw missing
+                onView(withId(R.id.listview1)).inRoot(isDialog())
+                    .perform(object : ViewAction {
+                        override fun getDescription() = "Swipe inside the visible part of the choice sheet"
+                        override fun getConstraints() = isDisplayed()
+                        override fun perform(controller: UiController, view: View) {
+                            val bounds = android.graphics.Rect()
+                            check(view.getGlobalVisibleRect(bounds) && bounds.height() > 100)
+                            val top = bounds.top + bounds.height() * 0.15f
+                            val bottom = bounds.bottom - bounds.height() * 0.15f
+                            GeneralSwipeAction(Swipe.FAST,
+                                { floatArrayOf(bounds.exactCenterX(), if (towardEnd) bottom else top) },
+                                { floatArrayOf(bounds.exactCenterX(), if (towardEnd) top else bottom) },
+                                Press.FINGER).perform(controller, view)
+                        }
+                    })
+            }
+        }
+    }
+
+    internal suspend fun playFromDownloadsOffline(expectedWidth: Int, expectedHeight: Int) {
+        val connectivity = context.getSystemService(ConnectivityManager::class.java)
+        try {
+            shell("cmd connectivity airplane-mode enable")
+            shell("svc wifi disable")
+            shell("svc data disable")
+            withTimeout(10_000) { while (connectivity.activeNetwork != null) delay(100) }
+            ActivityScenario.launch(MainActivity::class.java).use { offline ->
+                offline.onActivity { activity ->
+                    val nav = activity.supportFragmentManager.findFragmentById(R.id.nav_host_fragment) as NavHostFragment
+                    nav.navController.navigate(R.id.navigation_downloads)
+                }
+                withTimeout(20_000) {
+                    while (true) {
+                        var listed = false
+                        offline.onActivity {
+                            val title = it.findViewById<TextView>(R.id.download_header_title)
+                            listed = title?.isShown == true && title.text.toString() == "Download fixture"
+                        }
+                        if (listed) break
+                        delay(100)
+                    }
+                }
+                onView(allOf(withId(R.id.download_header_title), withText("Download fixture"))).perform(click())
+                withTimeout(20_000) {
+                    while (true) {
+                        var playing = false
+                        offline.onActivity {
+                            val player = it.findViewById<PlayerView>(R.id.player_view)?.player
+                            player?.playerError?.let { error -> throw AssertionError("Offline playback failed", error) }
+                            playing = player != null && player.currentPosition > 0 &&
+                                player.videoSize.width == expectedWidth && player.videoSize.height == expectedHeight
+                        }
+                        if (playing) break
+                        delay(100)
+                    }
+                }
+                assertNull(connectivity.activeNetwork)
+            }
+        } finally {
+            shell("cmd connectivity airplane-mode disable")
+            shell("svc wifi enable")
+            shell("svc data enable")
+        }
+    }
 
     /** Local HTTP verifies that every manifest/segment uses the provider's request interceptor. */
     private inner class FixtureServer(private val beforeBody: (String) -> Unit = {}) : AutoCloseable {
@@ -114,9 +223,181 @@ class AdaptiveDownloadTest {
         } finally { extractor.release() }
     }
 
+    @Test fun movieButtonOffersQualityAndVoiceAndSurvivesActivityRecreationDuringDownload() = runBlocking<Unit> {
+        val waiting = CountDownLatch(1)
+        val releaseBody = CountDownLatch(1)
+        val delayed = AtomicBoolean(false)
+        FixtureServer { path ->
+            if (path.contains("/chunk-1-00002.") && delayed.compareAndSet(false, true)) {
+                waiting.countDown()
+                check(releaseBody.await(30, TimeUnit.SECONDS))
+            }
+        }.use { server ->
+            val preferences = PreferenceManager.getDefaultSharedPreferences(context)
+            val pathKey = context.getString(R.string.download_path_key)
+            val previous = preferences.getString(pathKey, null)
+            val directory = File(context.getExternalFilesDir(null), "adaptive-ui-${System.nanoTime()}").apply { mkdirs() }
+            preferences.edit().putString(pathKey, directory.absolutePath).putInt("app_layout_key", 0).commit()
+            context.getSharedPreferences("rebuild_preference", 0).edit().putString("HAS_DONE_SETUP", "true").commit()
+            val provider = object : MainAPI() {
+                override var name = "Movie download fixture"
+                override var mainUrl = server.origin
+                override val hasDownloadSupport = true
+                override val supportedTypes = setOf(TvType.Movie)
+                override suspend fun load(url: String): LoadResponse =
+                    newMovieLoadResponse("Download fixture", url, TvType.Movie, "fixture-data")
+                override fun getVideoInterceptor(extractorLink: com.lagradost.cloudstream3.utils.ExtractorLink) =
+                    selection(extractorLink.quality, if (extractorLink.name.contains("Studio B")) 4 else 3)
+                override suspend fun loadLinks(data: String, isCasting: Boolean,
+                    subtitleCallback: (SubtitleFile) -> Unit,
+                    callback: (com.lagradost.cloudstream3.utils.ExtractorLink) -> Unit): Boolean {
+                    for (height in listOf(480, 720, 1080, 1440, 2160)) for (voice in listOf("Studio A", "Studio B")) {
+                        callback(newExtractorLink(name, "$voice · $height", "${server.origin}/dash/manifest.mpd#$height-$voice", ExtractorLinkType.DASH) {
+                            quality = height
+                        })
+                    }
+                    return true
+                }
+            }
+            var downloadId: Int? = null
+            var keepCompletedFile = false
+            val observedBytes = AtomicLong()
+            val progressListener: (Triple<Int, Long, Long>) -> Unit = { event ->
+                if (event.first == downloadId) observedBytes.set(event.second)
+            }
+            VideoDownloadManager.downloadProgressEvent += progressListener
+            val finished = CountDownLatch(1)
+            kotlin.concurrent.thread(name = "download-ui-watchdog", isDaemon = true) {
+                if (!finished.await(45, TimeUnit.SECONDS)) {
+                    Thread.getAllStackTraces().forEach { (thread, trace) ->
+                        android.util.Log.w("KadrogradDownloadTest", "${thread.name} ${thread.state}\n${trace.joinToString("\n")}")
+                    }
+                    val screenshots = File(context.getExternalFilesDir(null), "android-checks").apply { mkdirs() }
+                    instrumentation.uiAutomation.takeScreenshot()?.let { bitmap ->
+                        File(screenshots, "download-ui-stalled.png").outputStream().use {
+                            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+                        }
+                        bitmap.recycle()
+                    }
+                }
+            }
+            try {
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    withTimeout(30_000) {
+                        while (!PluginManager.loadedOnlinePlugins || !PluginManager.loadedLocalPlugins) delay(100)
+                    }
+                    APIHolder.addPluginMapping(provider)
+                    scenario.onActivity { it.loadResult("${server.origin}/movie", provider.name, "Download fixture") }
+                    withTimeout(20_000) {
+                        while (true) {
+                            var ready = false
+                            scenario.onActivity { ready = it.findViewById<View>(R.id.download_movie_button)?.let { view -> view.isShown && view.isEnabled } == true }
+                            if (ready) break
+                            delay(100)
+                        }
+                    }
+                    onView(withId(R.id.download_movie_button)).perform(click())
+                    onView(withId(R.id.listview1)).inRoot(isDialog()).check { view, error ->
+                        if (error != null) throw error
+                        val visible = android.graphics.Rect()
+                        view.getGlobalVisibleRect(visible)
+                        android.util.Log.i("KadrogradDownloadTest", "Choice list height=${view.height}, visible=$visible, bottomPadding=${view.paddingBottom}")
+                    }
+                    // The movie button must show all choices before anything is queued.
+                    for (height in listOf(2160, 1440, 1080, 720, 480)) for (voice in listOf("Studio A", "Studio B")) {
+                        android.util.Log.i("KadrogradDownloadTest", "Checking choice $voice $height")
+                        revealChoice("$voice · $height")
+                    }
+                    assertTrue(VideoDownloadManager.currentDownloads.value.isEmpty())
+                    revealChoice("Studio B · 1080", towardEnd = false)
+                    onView(allOf(withText(containsString("Studio B · 1080")), isCompletelyDisplayed()))
+                        .inRoot(isDialog()).perform(click())
+                    withContext(Dispatchers.IO) { assertTrue("Queue service did not request video", waiting.await(20, TimeUnit.SECONDS)) }
+                    downloadId = checkNotNull(DownloadQueueService.downloadInstances.value.singleOrNull()) {
+                        "Queue entry disappeared: status=${VideoDownloadManager.downloadStatus}, files=${directory.walkTopDown().filter { it.isFile }.map { it.name }.toList()}"
+                    }.downloadQueueWrapper.id
+                    assertTrue(DownloadQueueService.isRunning)
+                    val activeInfo = AdaptiveDownload.activeFileInfo(requireNotNull(downloadId))
+                    assertNotNull("The active download has no progress entry", activeInfo)
+                    assertNull(CloudStreamApp.getKey<DownloadObjects.DownloadedFileInfo>(VideoDownloadManager.KEY_DOWNLOAD_INFO, downloadId.toString()))
+                    val notifications = context.getSystemService(NotificationManager::class.java)
+                    withTimeout(5_000) { while (observedBytes.get() <= 0) delay(100) }
+                    withTimeout(5_000) {
+                        while (true) {
+                            var text: CharSequence? = null
+                            scenario.onActivity {
+                                val label = it.findViewById<TextView>(R.id.result_movie_download_text_precentage)
+                                if (label?.isShown == true) text = label.text
+                            }
+                            if (!text.isNullOrBlank()) {
+                                assertNotEquals("100%", text.toString())
+                                break
+                            }
+                            delay(100)
+                        }
+                    }
+                    try {
+                        withTimeout(5_000) {
+                            while (notifications.activeNotifications.none {
+                                val maximum = it.notification.extras.getInt(Notification.EXTRA_PROGRESS_MAX)
+                                val progress = it.notification.extras.getInt(Notification.EXTRA_PROGRESS)
+                                val indeterminate = it.notification.extras.getBoolean(Notification.EXTRA_PROGRESS_INDETERMINATE)
+                                it.id == downloadId && ((maximum > 0 && progress in 1 until maximum) || indeterminate)
+                            }) delay(100)
+                        }
+                    } finally {
+                        android.util.Log.i("KadrogradDownloadTest", "Notifications=${notifications.activeNotifications.map {
+                            listOf(it.id, it.notification.extras.getInt(Notification.EXTRA_PROGRESS),
+                                it.notification.extras.getInt(Notification.EXTRA_PROGRESS_MAX),
+                                it.notification.extras.getBoolean(Notification.EXTRA_PROGRESS_INDETERMINATE))
+                        }}; progress=${CloudStreamApp.getKey<DownloadObjects.DownloadedFileInfo>(VideoDownloadManager.KEY_DOWNLOAD_INFO, downloadId.toString())}")
+                    }
+                    val screenshots = File(context.getExternalFilesDir(null), "android-checks").apply { mkdirs() }
+                    instrumentation.uiAutomation.takeScreenshot().let { bitmap ->
+                        File(screenshots, "download-progress.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                        bitmap.recycle()
+                    }
+                    scenario.recreate()
+                    scenario.onActivity { assertFalse(it.isFinishing) }
+                    delay(2_000)
+                    releaseBody.countDown()
+                    withTimeout(60_000) {
+                        while (CloudStreamApp.getKey<DownloadObjects.DownloadedFileInfo>(VideoDownloadManager.KEY_DOWNLOAD_INFO, downloadId.toString()) == null) delay(100)
+                    }
+                    val file = directory.walkTopDown().single { it.isFile }
+                    assertTracks(file, 1920, 1080)
+                    scenario.onActivity { assertFalse(it.isFinishing) }
+                }
+                val requestsBeforeOffline = server.requests.size
+                playFromDownloadsOffline(1920, 1080)
+                assertEquals(requestsBeforeOffline, server.requests.size)
+                if (InstrumentationRegistry.getArguments().getString("keepOfflineFixture") == "true") {
+                    assertTrue(context.getSharedPreferences("kadrograd_offline_check", 0).edit()
+                        .putInt("pid", android.os.Process.myPid())
+                        .putInt("download_id", requireNotNull(downloadId))
+                        .putString("directory", directory.absolutePath).commit())
+                    keepCompletedFile = true
+                }
+            } finally {
+                finished.countDown()
+                releaseBody.countDown()
+                VideoDownloadManager.downloadProgressEvent -= progressListener
+                downloadId?.let { id ->
+                    withContext(Dispatchers.Main.immediate) {
+                        VideoDownloadManager.downloadEvent(id to VideoDownloadManager.DownloadActionType.Stop)
+                    }
+                    if (!keepCompletedFile) CloudStreamApp.removeKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString())
+                }
+                APIHolder.removePluginMapping(provider)
+                preferences.edit().apply { if (previous == null) remove(pathKey) else putString(pathKey, previous) }.commit()
+                if (!keepCompletedFile) directory.deleteRecursively()
+            }
+        }
+    }
+
     @Test fun dashPreservesSdFullHdAndUhdAndSelectedOpusVoice() = runBlocking {
         FixtureServer().use { server ->
-            for ((width, height) in listOf(854 to 480, 1920 to 1080, 3840 to 2160)) {
+            for ((width, height) in listOf(854 to 480, 1280 to 720, 1920 to 1080, 2560 to 1440, 3840 to 2160)) {
                 val output = File.createTempFile("adaptive-", ".mp4", context.cacheDir)
                 try {
                     val link = newExtractorLink("Fixture", "Selected voice", "${server.origin}/dash/manifest.mpd", ExtractorLinkType.DASH) { quality = height }
@@ -262,6 +543,30 @@ class AdaptiveDownloadTest {
                 APIHolder.removePluginMapping(provider)
                 CloudStreamApp.removeKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString())
                 preferences.edit().apply { if (previous == null) remove(pathKey) else putString(pathKey, previous) }.commit()
+                directory.deleteRecursively()
+            }
+        }
+    }
+
+    @Test fun stoppingAReplacementKeepsThePreviouslyCompletedFileAndRecord() = runBlocking<Unit> {
+        FixtureServer().use { server ->
+            val directory = File(context.getExternalFilesDir(null), "adaptive-previous-${System.nanoTime()}").apply { mkdirs() }
+            val file = File(directory, "completed.webm").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+            val id = 987654323
+            val previous = DownloadObjects.DownloadedFileInfo(file.length(), "", file.name, basePath = directory.absolutePath)
+            CloudStreamApp.setKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString(), previous)
+            try {
+                val link = newExtractorLink("Fixture", "Studio B", "${server.origin}/dash/manifest.mpd", ExtractorLinkType.DASH)
+                val result = AdaptiveDownload.download(context, link, null, "Replacement", "", id) { state ->
+                    if (state.type == VideoDownloadManager.DownloadType.IsDownloading) {
+                        VideoDownloadManager.downloadEvent(id to VideoDownloadManager.DownloadActionType.Stop)
+                    }
+                }
+                assertTrue(result.success)
+                assertEquals(previous, CloudStreamApp.getKey<DownloadObjects.DownloadedFileInfo>(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString()))
+                assertArrayEquals(byteArrayOf(1, 2, 3, 4), file.readBytes())
+            } finally {
+                CloudStreamApp.removeKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString())
                 directory.deleteRecursively()
             }
         }

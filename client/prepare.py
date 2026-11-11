@@ -18,6 +18,10 @@ HASHES = {
     BASE + "ui/result/EpisodeAdapter.kt": "b377967f8b5663a3949836af46773cec8f83ef52c9cfb184de042c0626143f9e",
     BASE + "ui/result/ResultFragmentPhone.kt": "f6dabd385895cb88f3201f632c413d337a4d72289b7f7d28bf87d9ffbe1967a1",
     BASE + "ui/result/ResultViewModel2.kt": "9a44eb8865d9dca08302751d6a36b651181bb848f2507ecf85570a933e37f4d5",
+    BASE + "ui/download/button/BaseFetchButton.kt": "aeeeb1d898cecbd41c547f4dae6e46807756fbb98a9aa5b1b4beb36fc4f5983f",
+    BASE + "ui/download/button/DownloadButton.kt": "e27c51f8d32d0a9177869c4dc593f857a53a16a49e57d1315316f40e2fb9fc61",
+    BASE + "ui/download/button/PieFetchButton.kt": "49262fe36f907a69ad590e1f8ff4591b8b6c25bc40308c74d614a81a45048a6f",
+    BASE + "ui/download/DownloadViewModel.kt": "952dcd894d809147abe8adcd448ff4036ea53980d34c98eb381371302319991c",
 }
 
 
@@ -80,6 +84,25 @@ dependencies {
 
     path = BASE + "utils/downloader/DownloadManager.kt"
     text = replace_once(changes[path], " || link.type == ExtractorLinkType.DASH", " /* DASH is handled by AdaptiveDownload below. */")
+    text = replace_once(text, """                builder.setProgress((total / 1000).toInt(), (progress / 1000).toInt(), false)""", """                if (total > 0) {
+                    builder.setProgress((total / 1000).coerceAtLeast(1).toInt(), (progress / 1000).toInt(), false)
+                } else builder.setProgress(0, 0, true)""")
+    text = replace_once(text, "                    progressPercentage = progress * 100 / total", "                    progressPercentage = if (total > 0) progress * 100 / total else 0")
+    text = replace_once(text, """                            (if (linkName == null) "" else "$linkName\\n") + "$rowTwo\\n$progressPercentage % ($progressMbString/$totalMbString)$suffix$mbPerSecondString $remainingTime" """.rstrip(),
+        """                            (if (linkName == null) "" else "$linkName\\n") +
+                                if (total <= 0 && hlsTotal == null) {
+                                    "$rowTwo\\n" + android.text.format.Formatter.formatShortFileSize(context, progress) + mbPerSecondString
+                                } else "$rowTwo\\n$progressPercentage % ($progressMbString/$totalMbString)$suffix$mbPerSecondString $remainingTime" """.rstrip())
+    text = replace_once(text, """    fun getDownloadFileInfo(
+        context: Context,
+        id: Int,
+    ): DownloadedFileInfoResult? {
+        try {""", """    fun getDownloadFileInfo(
+        context: Context,
+        id: Int,
+    ): DownloadedFileInfoResult? {
+        AdaptiveDownload.activeFileInfo(id)?.let { return it }
+        try {""")
     text = replace_once(text, '                        "mp4",\n                        tryResume,',
         '                        if (link.url.toUri().lastPathSegment?.endsWith(".webm", ignoreCase = true) == true) "webm" else "mp4",\n                        tryResume,')
     text = replace_once(text, "            when (link.type) {\n                ExtractorLinkType.M3U8 -> {", """            if (link.type == ExtractorLinkType.DASH ||
@@ -90,6 +113,58 @@ dependencies {
                 ExtractorLinkType.M3U8 -> {""")
     changes[path] = replace_once(text, "        } catch (_: Throwable) {\n            return DOWNLOAD_FAILED\n        } finally {\n            extractorJob.cancel()",
         "        } catch (cancelled: CancellationException) {\n            throw cancelled\n        } catch (_: Throwable) {\n            return DOWNLOAD_FAILED\n        } finally {\n            extractorJob.cancel()")
+
+    path = BASE + "ui/download/DownloadViewModel.kt"
+    text = replace_once(changes[path], "            if (childFile.fileLength <= 1) return@forEach", """            if (childFile.fileLength <= 1 &&
+                com.lagradost.cloudstream3.utils.downloader.AdaptiveDownload.activeFileInfo(child.id) == null
+            ) return@forEach""")
+    changes[path] = replace_once(text, "            if (bytes <= 0 || downloads <= 0) {", "            if (downloads <= 0) {")
+
+    path = BASE + "ui/download/button/BaseFetchButton.kt"
+    text = replace_once(changes[path], "if (downloadedLength < 1024) 0 else maxOf(", "if (downloadedLength < 1024 || totalLength <= 0) 0 else maxOf(")
+    text = replace_once(text, "downloadedBytes > 1024L && downloadedBytes + 1024L >= totalBytes", "totalBytes > 0 && downloadedBytes > 1024L && downloadedBytes + 1024L >= totalBytes")
+    text = replace_once(text, """        progressBar.post {
+            val steps = 10000L""", """        progressBar.post {
+            val unknownTotal = totalBytes <= 0 && downloadedBytes > 0
+            progressBar.isIndeterminate = unknownTotal
+            if (unknownTotal) {
+                progressBar.clearAnimation()
+                if (doSetProgress) progressText?.text = formatShortFileSize(context, downloadedBytes)
+                return@post
+            }
+            val steps = 10000L""")
+    changes[path] = text
+
+    path = BASE + "ui/download/button/PieFetchButton.kt"
+    changes[path] = replace_once(changes[path], "(metadata.downloadedLength > 1024 && metadata.downloadedLength + 1024 >= metadata.totalLength)", "(metadata.totalLength > 0 && metadata.downloadedLength > 1024 && metadata.downloadedLength + 1024 >= metadata.totalLength)")
+
+    path = BASE + "ui/download/button/DownloadButton.kt"
+    text = replace_once(changes[path], "            textView,\n            card,", "            textView ?: findViewById(R.id.result_movie_download_text_precentage),\n            card,")
+    changes[path] = replace_once(text, """        val isVis = metadata.progressPercentage > 0
+        progressText?.isVisible = isVis
+        if (isVis)
+            progressText?.text = "${metadata.progressPercentage}%"
+    }""", """        updateProgressText(metadata.downloadedLength, metadata.totalLength)
+    }
+
+    override fun setProgress(downloadedBytes: Long, totalBytes: Long) {
+        super.setProgress(downloadedBytes, totalBytes)
+        updateProgressText(downloadedBytes, totalBytes)
+    }
+
+    private fun updateProgressText(downloadedBytes: Long, totalBytes: Long) {
+        progressText?.post {
+            val view = progressText ?: return@post
+            view.isVisible = downloadedBytes > 0 && currentMetaData.status in setOf(
+                DownloadStatusTell.IsDownloading, DownloadStatusTell.IsPaused
+            )
+            if (view.isVisible) {
+                view.text = if (totalBytes > 0) {
+                    "${(100.0 * downloadedBytes / totalBytes).toInt().coerceIn(0, 99)}%"
+                } else android.text.format.Formatter.formatShortFileSize(context, downloadedBytes)
+            }
+        }
+    }""")
 
     # This fork has another package and signing certificate; upstream APKs cannot update it.
     path = BASE + "utils/InAppUpdater.kt"
@@ -107,7 +182,24 @@ dependencies {
         text = text.replace(before, after)
     changes[path] = text
     path = BASE + "ui/result/ResultFragmentPhone.kt"
-    changes[path] = replace_once(changes[path], "requirePathForActions(listOf(ACTION_DOWNLOAD_EPISODE to ep))", "requirePathForActions(listOf(ACTION_DOWNLOAD_MIRROR to ep))")
+    text = replace_once(changes[path], """                            DOWNLOAD_ACTION_DOWNLOAD -> {
+                                requirePathForActions(listOf(ACTION_DOWNLOAD_EPISODE to ep))
+                            }""", """                            DOWNLOAD_ACTION_DOWNLOAD -> {
+                                requirePathForActions(listOf(ACTION_DOWNLOAD_MIRROR to ep))
+                            }""")
+    changes[path] = replace_once(text, """                        popup.callback(it)
+                    }
+                )
+            }
+        }""", """                        popup.callback(it)
+                    }
+                ).also { dialog ->
+                    if (title == act.getString(R.string.episode_action_download_mirror)) {
+                        com.lagradost.cloudstream3.utils.downloader.DownloadChoiceDialog.fitSystemBars(dialog)
+                    }
+                }
+            }
+        }""")
 
     path = BASE + "ui/result/ResultViewModel2.kt"
     text = replace_once(changes[path], "        isCasting: Boolean = false,\n        callback: (Pair<LinkLoadingResult, Int>) -> Unit",
@@ -195,7 +287,7 @@ dependencies {
         import re
         label = "CloudStream"
         text = re.sub(r'(<string name="app_name">)[^<]*(</string>)', rf'\g<1>{label}\g<2>', text)
-        picker = "Выбрать качество и озвучку" if path.parent.name == "values-ru" else "Choose quality and voice"
+        picker = "Выбрать качество и озвучку" if path.parent.name in {"values-ru", "values-b+ru"} else "Choose quality and voice"
         text = re.sub(r'(<string name="episode_action_download_mirror">)[^<]*(</string>)', rf'\g<1>{picker}\g<2>', text)
         path.write_text(text, encoding="utf-8", newline="\n")
     marker.write_text(json.dumps({p: hashlib.sha256((root / p).read_bytes()).hexdigest() for p in HASHES}, indent=2))
