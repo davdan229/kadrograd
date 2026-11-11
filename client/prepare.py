@@ -182,11 +182,24 @@ dependencies {
         text = text.replace(before, after)
     changes[path] = text
     path = BASE + "ui/result/ResultFragmentPhone.kt"
-    changes[path] = replace_once(changes[path], """                            DOWNLOAD_ACTION_DOWNLOAD -> {
+    text = replace_once(changes[path], """                            DOWNLOAD_ACTION_DOWNLOAD -> {
                                 requirePathForActions(listOf(ACTION_DOWNLOAD_EPISODE to ep))
                             }""", """                            DOWNLOAD_ACTION_DOWNLOAD -> {
                                 requirePathForActions(listOf(ACTION_DOWNLOAD_MIRROR to ep))
                             }""")
+    changes[path] = replace_once(text, """                        popup.callback(it)
+                    }
+                )
+            }
+        }""", """                        popup.callback(it)
+                    }
+                ).also { dialog ->
+                    if (title == act.getString(R.string.episode_action_download_mirror)) {
+                        com.lagradost.cloudstream3.utils.downloader.DownloadChoiceDialog.fitSystemBars(dialog)
+                    }
+                }
+            }
+        }""")
 
     path = BASE + "ui/result/ResultViewModel2.kt"
     text = replace_once(changes[path], "        isCasting: Boolean = false,\n        callback: (Pair<LinkLoadingResult, Int>) -> Unit",
