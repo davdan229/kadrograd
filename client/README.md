@@ -4,7 +4,7 @@
 
 Приложение сохраняет название и интерфейс CloudStream и устанавливается рядом с официальной сборкой. Изменения основаны на закреплённой ревизии из `upstream.json`; исходники CloudStream не копируются в этот репозиторий. Скрипт проверяет контрольные суммы изменяемых файлов, применяет изменения и добавляет файлы из `overlay`.
 
-[Скачать 1.0.0-beta.2](https://github.com/davdan229/kadrograd/releases/tag/client-v1.0.0-beta.2) · [Проверка на Android](https://github.com/davdan229/kadrograd/actions/runs/42336638358). Обновления этой сборки устанавливаются поверх неё; установка beta.2 поверх beta.1 с сохранением настроек и файлов проверена на Android.
+[Скачать 1.0.0-beta.3](https://github.com/davdan229/kadrograd/releases/tag/client-v1.0.0-beta.3). Обновление устанавливается поверх предыдущей сборки Кадрограда без удаления. На Android 13 проверено сохранение тестовых DASH-потоков в 480p, 720p, 1080p, 1440p и 4K, сохранение выбранной озвучки, пауза и отмена. Полный сценарий через интерфейс и запуск скачанного после остановки процесса продолжают проверяться в [GitHub Actions](https://github.com/davdan229/kadrograd/actions/workflows/client.yml).
 
 ```sh
 git clone https://github.com/recloudstream/cloudstream.git upstream
