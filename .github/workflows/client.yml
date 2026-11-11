@@ -15,7 +15,7 @@ on:
         type: boolean
         default: false
       android_api:
-        description: 'Android API for device checks (30, 35 or 36)'
+        description: 'Android API for device checks (30, 33, 35 or 36)'
         required: false
         type: string
         default: '35'

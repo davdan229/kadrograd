@@ -3,7 +3,7 @@ set -euo pipefail
 checkout=$(realpath "${1:?CloudStream checkout is required}")
 results="$checkout/android-checks"
 android_api="${KADROGRAD_ANDROID_API:-35}"
-case "$android_api" in 30|35|36) ;; *) echo 'Unsupported Android API'; exit 1 ;; esac
+case "$android_api" in 30|33|35|36) ;; *) echo 'Unsupported Android API'; exit 1 ;; esac
 check_suite="${KADROGRAD_CHECK_SUITE:-all}"
 case "$check_suite" in all|ui|home) ;; *) echo 'Unsupported check suite'; exit 1 ;; esac
 mkdir -p "$results"
