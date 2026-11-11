@@ -77,7 +77,7 @@ if [ "$check_suite" != all ]; then
     classes='com.lagradost.cloudstream3.KadrogradHomeTest#allBundledSourcesHaveAVisibleHeroAndPlayButton'
     expected='OK (1 test)'
   fi
-  timeout 300 adb shell am instrument -w -r -e keepOfflineFixture true -e class "$classes" ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/selected-instrumentation.txt" || status=1
+  timeout 180 adb shell am instrument -w -r -e keepOfflineFixture true -e class "$classes" ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/selected-instrumentation.txt" || status=1
   grep -q "$expected" "$results/selected-instrumentation.txt" || status=1
   if [ "$check_suite" = ui ] && [ "$status" = 0 ]; then verify_offline_restart; fi
   if [ "$status" != 0 ]; then
