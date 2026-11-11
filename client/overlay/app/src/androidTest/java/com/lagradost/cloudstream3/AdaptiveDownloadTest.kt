@@ -216,7 +216,7 @@ class AdaptiveDownloadTest {
                 override suspend fun loadLinks(data: String, isCasting: Boolean,
                     subtitleCallback: (SubtitleFile) -> Unit,
                     callback: (com.lagradost.cloudstream3.utils.ExtractorLink) -> Unit): Boolean {
-                    for (height in listOf(480, 1080, 2160)) for (voice in listOf("Studio A", "Studio B")) {
+                    for (height in listOf(480, 720, 1080, 1440, 2160)) for (voice in listOf("Studio A", "Studio B")) {
                         callback(newExtractorLink(name, "$voice · $height", "${server.origin}/dash/manifest.mpd#$height-$voice", ExtractorLinkType.DASH) {
                             quality = height
                         })
@@ -247,7 +247,7 @@ class AdaptiveDownloadTest {
                     }
                     onView(withId(R.id.download_movie_button)).perform(click())
                     // The movie button must show all choices before anything is queued.
-                    for (height in listOf(480, 1080, 2160)) for (voice in listOf("Studio A", "Studio B")) {
+                    for (height in listOf(480, 720, 1080, 1440, 2160)) for (voice in listOf("Studio A", "Studio B")) {
                         onData(allOf(instanceOf(String::class.java), containsString("$voice · $height")))
                             .check(matches(isDisplayed()))
                     }
@@ -330,7 +330,7 @@ class AdaptiveDownloadTest {
 
     @Test fun dashPreservesSdFullHdAndUhdAndSelectedOpusVoice() = runBlocking {
         FixtureServer().use { server ->
-            for ((width, height) in listOf(854 to 480, 1920 to 1080, 3840 to 2160)) {
+            for ((width, height) in listOf(854 to 480, 1280 to 720, 1920 to 1080, 2560 to 1440, 3840 to 2160)) {
                 val output = File.createTempFile("adaptive-", ".mp4", context.cacheDir)
                 try {
                     val link = newExtractorLink("Fixture", "Selected voice", "${server.origin}/dash/manifest.mpd", ExtractorLinkType.DASH) { quality = height }
