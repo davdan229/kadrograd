@@ -13,7 +13,6 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.downloader.AdaptiveDownload
 import com.lagradost.cloudstream3.utils.downloader.DownloadChoices
-import com.lagradost.nicehttp.Requests
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -29,21 +28,7 @@ class LiveDownloadTest {
         val query = InstrumentationRegistry.getArguments().getString("movieQuery").orEmpty()
         require(query.isNotBlank()) { "movieQuery is required for the opt-in live transfer" }
         val output = File(context.cacheDir, "live-download-${System.nanoTime()}.media")
-        val previousApp = app
-        app = Requests(baseClient = previousApp.baseClient.newBuilder().addInterceptor { chain ->
-            val host = chain.request().url.host
-            try {
-                chain.proceed(chain.request()).also { response ->
-                    android.util.Log.i("KadrogradDownloadTest", "Source HTTP $host ${response.code}")
-                }
-            } catch (error: java.io.IOException) {
-                android.util.Log.w("KadrogradDownloadTest", "Source HTTP $host ${error.javaClass.simpleName}")
-                throw error
-            }
-        }.build(), defaultHeaders = previousApp.defaultHeaders, defaultReferer = previousApp.defaultReferer,
-            defaultCookies = previousApp.defaultCookies, responseParser = previousApp.responseParser,
-            defaultData = previousApp.defaultData, defaultCacheTime = previousApp.defaultCacheTime,
-            defaultCacheTimeUnit = previousApp.defaultCacheTimeUnit, defaultTimeOut = previousApp.defaultTimeOut)
+        var previousClient: okhttp3.OkHttpClient? = null
         try {
             context.getSharedPreferences("rebuild_preference", 0).edit().putString("HAS_DONE_SETUP", "true").commit()
             PreferenceManager.getDefaultSharedPreferences(context).edit()
@@ -53,6 +38,19 @@ class LiveDownloadTest {
                     while (getApiFromNameNull("Кадроград · Zona") == null) delay(100)
                 }
                 val provider = checkNotNull(getApiFromNameNull("Кадроград · Zona"))
+                val baseClient = app.baseClient
+                previousClient = baseClient
+                app.baseClient = baseClient.newBuilder().addInterceptor { chain ->
+                    val host = chain.request().url.host
+                    try {
+                        chain.proceed(chain.request()).also { response ->
+                            android.util.Log.i("KadrogradDownloadTest", "Source HTTP $host ${response.code}")
+                        }
+                    } catch (error: java.io.IOException) {
+                        android.util.Log.w("KadrogradDownloadTest", "Source HTTP $host ${error.javaClass.simpleName}")
+                        throw error
+                    }
+                }.build()
                 assertTrue(provider.hasDownloadSupport)
                 val hit = checkNotNull(provider.search(query)?.firstOrNull { it.name.equals(query, true) }) { "Exact movie not found" }
                 val movie = provider.load(hit.url) as? MovieLoadResponse ?: error("Expected a movie")
@@ -125,6 +123,9 @@ class LiveDownloadTest {
                     }
                 } finally { instrumentation.runOnMainSync { player?.release() } }
             }
-        } finally { app = previousApp; output.delete() }
+        } finally {
+            previousClient?.let { app.baseClient = it }
+            output.delete()
+        }
     }
 }

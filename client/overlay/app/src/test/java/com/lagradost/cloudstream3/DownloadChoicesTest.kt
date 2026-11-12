@@ -41,4 +41,13 @@ class DownloadChoicesTest {
         val alternateA = link("alternate-a", 1080, "Студия А", stream = "alternate")
         assertEquals(listOf(mainA, mainB, alternate, alternateA), DownloadChoices.select(listOf(mainA, mainB, alternate, alternateA)))
     }
+
+    @Test fun batchKeepsVoiceAndQualityAcrossEpisodeUrls() = runBlocking {
+        val selected = DownloadChoices.batchChoice(link("ep1", 1080, "Студия А", stream = "one"))
+        assertNotNull(selected)
+        assertEquals(selected, DownloadChoices.batchChoice(link("ep2", 1080, "студия а", stream = "two")))
+        assertNotEquals(selected, DownloadChoices.batchChoice(link("lower", 720, "Студия А")))
+        assertNotEquals(selected, DownloadChoices.batchChoice(link("other", 1080, "Студия Б")))
+        assertNull(DownloadChoices.batchChoice(link("multiple", 1080, "Студия А", "Студия Б")))
+    }
 }

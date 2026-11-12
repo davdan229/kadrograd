@@ -1,6 +1,7 @@
 package com.lagradost.cloudstream3.utils.downloader
 
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.downloader.DownloadObjects.BatchChoice
 import org.json.JSONObject
 import java.util.Locale
 
@@ -23,6 +24,20 @@ internal object DownloadChoices {
         if (voices.isEmpty()) return@runCatching null
         Offer(Stream(link.url.substringBefore('#'), kind, width, height), voices)
     }.getOrNull()
+
+    fun batchChoice(link: ExtractorLink): BatchChoice? {
+        val offer = offer(link)
+        if (offer != null) {
+            val voice = offer.voices.singleOrNull() ?: return null
+            return BatchChoice(link.source, link.quality, voice)
+        }
+        val label = when {
+            link.name.startsWith("AnimeVost · ") -> "AnimeVost"
+            link.name.startsWith("AniLibria · ") -> "AniLibria"
+            else -> link.name
+        }
+        return BatchChoice(link.source, link.quality, label.trim().lowercase(Locale.ROOT))
+    }
 
     fun select(links: List<ExtractorLink>): List<ExtractorLink> {
         val named = links.map { it to offer(it) }

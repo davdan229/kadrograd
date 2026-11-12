@@ -194,7 +194,7 @@ class AdaptiveDownloadTest {
     }
 
     /** Local HTTP verifies that every manifest/segment uses the provider's request interceptor. */
-    private inner class FixtureServer(private val breakFirstChunk: Boolean = false,
+    private inner class FixtureServer(private val disconnectOn: String? = null,
         private val beforeBody: (String) -> Unit = {}) : AutoCloseable {
         val requests = ConcurrentLinkedQueue<String>()
         val ranges = ConcurrentLinkedQueue<Pair<String, Long>>()
@@ -231,7 +231,7 @@ class AdaptiveDownloadTest {
                             write("Content-Length: ${body.size}\r\nConnection: close\r\n\r\n".toByteArray())
                             flush()
                             beforeBody(path)
-                            if (breakFirstChunk && start == 0 && body.size > 1 && path.contains("/chunk-0-") && broken.compareAndSet(false, true)) {
+                            if (disconnectOn != null && start == 0 && body.size > 1 && path.contains(disconnectOn) && broken.compareAndSet(false, true)) {
                                 write(body, 0, body.size / 2)
                                 flush()
                                 return@use
@@ -476,7 +476,7 @@ class AdaptiveDownloadTest {
     }
 
     @Test fun interruptedMediaReadContinuesFromItsReceivedOffset() = runBlocking {
-        FixtureServer(breakFirstChunk = true).use { server ->
+        FixtureServer(disconnectOn = "/chunk-0-").use { server ->
             val output = File.createTempFile("adaptive-range-retry-", ".webm", context.cacheDir)
             try {
                 val link = newExtractorLink("Fixture", "Studio B", "${server.origin}/dash/manifest.mpd", ExtractorLinkType.DASH) { quality = 2160 }
@@ -528,8 +528,8 @@ class AdaptiveDownloadTest {
         }
     }
 
-    @Test fun hlsWithSeparateAudioSavesTheSelectedVoice() = runBlocking {
-        FixtureServer().use { server ->
+    @Test fun hlsWithSeparateAudioRecoversAndSavesTheSelectedVoice() = runBlocking {
+        FixtureServer(disconnectOn = "/video-1.ts").use { server ->
             val output = File.createTempFile("adaptive-hls-", ".mp4", context.cacheDir)
             try {
                 val link = newExtractorLink("Fixture", "Studio B", "${server.origin}/hls/master.m3u8", ExtractorLinkType.M3U8) { quality = 1080 }
@@ -537,6 +537,8 @@ class AdaptiveDownloadTest {
                 assertTracks(output, 1920, 1080, "video/avc", "audio/mp4a-latm")
                 assertTrue(server.requests.any { it.contains("audio-b-") })
                 assertFalse(server.requests.any { it.contains("audio-a") })
+                assertTrue("HLS did not resume the interrupted segment", server.ranges.any { it.first.endsWith("/video-1.ts") && it.second > 0 })
+                assertEquals(1, server.requests.count { it.endsWith("/master.m3u8") })
             } finally { output.delete() }
         }
     }

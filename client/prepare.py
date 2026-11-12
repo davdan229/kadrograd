@@ -23,6 +23,7 @@ HASHES = {
     BASE + "ui/download/button/PieFetchButton.kt": "49262fe36f907a69ad590e1f8ff4591b8b6c25bc40308c74d614a81a45048a6f",
     BASE + "ui/download/DownloadViewModel.kt": "952dcd894d809147abe8adcd448ff4036ea53980d34c98eb381371302319991c",
     BASE + "utils/downloader/DownloadQueueManager.kt": "b15301122cb1a64992e9bbf07cf5ba81d2e225ad6dd3e779d5aa8e5e3fb4c94c",
+    BASE + "utils/downloader/DownloadObjects.kt": "395ad54b411e45adab1513aa02f7b8498f501e02320337aeba48181b43940863",
     BASE + "services/DownloadQueueService.kt": "a6b252d201c93fd27a349d6963225e5a51f1ca410cf25fc9bb433636b6a91240",
 }
 
@@ -127,8 +128,27 @@ dependencies {
             }
             when (link.type) {
                 ExtractorLinkType.M3U8 -> {""")
+    text = replace_once(text, "            val currentLinks = mutableSetOf<ExtractorLink>()",
+        "            val currentLinks = java.util.concurrent.ConcurrentHashMap.newKeySet<ExtractorLink>()")
+    text = replace_once(text, "            // Remove link loading notification", """            val candidates = downloadItem.batchChoice?.let { selection ->
+                currentLinks.filter { DownloadChoices.batchChoice(it) == selection }
+            } ?: currentLinks.toList()
+            // Remove link loading notification""")
+    text = replace_once(text, "} else if (currentLinks.isEmpty()) {", "} else if (candidates.isEmpty()) {")
+    text = replace_once(text, "val sortedLinks = currentLinks.sortedBy", "val sortedLinks = candidates.sortedBy")
     changes[path] = replace_once(text, "        } catch (_: Throwable) {\n            return DOWNLOAD_FAILED\n        } finally {\n            extractorJob.cancel()",
         "        } catch (cancelled: CancellationException) {\n            throw cancelled\n        } catch (_: Throwable) {\n            return DOWNLOAD_FAILED\n        } finally {\n            extractorJob.cancel()")
+
+    path = BASE + "utils/downloader/DownloadObjects.kt"
+    text = replace_once(changes[path], '        @JsonProperty("subs") val subs: List<SubtitleData>? = null,',
+        '        @JsonProperty("subs") val subs: List<SubtitleData>? = null,\n        @JsonProperty("batchChoice") val batchChoice: BatchChoice? = null,')
+    changes[path] = replace_once(text, "    /** General data about the episode and show to start a download from. */", """    data class BatchChoice(
+        @JsonProperty("source") val source: String,
+        @JsonProperty("quality") val quality: Int,
+        @JsonProperty("voice") val voice: String,
+    )
+
+    /** General data about the episode and show to start a download from. */""")
 
     path = BASE + "utils/downloader/DownloadQueueManager.kt"
     text = replace_once(changes[path], """            newQueue.forEach { obj ->
@@ -250,6 +270,25 @@ dependencies {
                             }""", """                            DOWNLOAD_ACTION_DOWNLOAD -> {
                                 requirePathForActions(listOf(ACTION_DOWNLOAD_MIRROR to ep))
                             }""")
+    text = replace_once(text, "ConcurrentLinkedDeque<Pair<Int, ResultEpisode>>()", "ConcurrentLinkedDeque<() -> Unit>()")
+    text = replace_once(text, """        pendingPathActions.addAll(list)
+        val (_, path)""", """        requirePathForAction {
+            list.forEach { (action, episode) -> viewModel.handleAction(EpisodeClickEvent(action, episode)) }
+        }
+    }
+
+    private fun requirePathForAction(action: () -> Unit) {
+        pendingPathActions.add(action)
+        val (_, path)""")
+    text = replace_once(text, """                val (action, data) = pendingPathActions.pop()
+                viewModel.handleAction(
+                    EpisodeClickEvent(
+                        action,
+                        data
+                    )
+                )""", "                pendingPathActions.removeFirst().invoke()")
+    text = replace_once(text, "                                requirePathForActions(episodes.value.map { ACTION_DOWNLOAD_EPISODE to it })",
+        "                                val batch = episodes.value.toList()\n                                requirePathForAction { viewModel.chooseBatchDownload(batch) }")
     changes[path] = replace_once(text, """                        popup.callback(it)
                     }
                 )
@@ -266,12 +305,18 @@ dependencies {
 
     path = BASE + "ui/result/ResultViewModel2.kt"
     text = replace_once(changes[path], "        isCasting: Boolean = false,\n        callback: (Pair<LinkLoadingResult, Int>) -> Unit",
-        "        isCasting: Boolean = false,\n        forDownload: Boolean = false,\n        callback: (Pair<LinkLoadingResult, Int>) -> Unit")
+        "        isCasting: Boolean = false,\n        forDownload: Boolean = false,\n        forBatch: Boolean = false,\n        callback: (Pair<LinkLoadingResult, Int>) -> Unit")
     text = replace_once(text, """            // Could not find a better way to do this
             //val context = CloudStreamApp.context
             postPopup(
                 text,
-                links.links.map { txt("${it.name} ${Qualities.getStringByInt(it.quality)}") }""", """            val selected = if (forDownload) links.copy(links = com.lagradost.cloudstream3.utils.downloader.DownloadChoices.select(links.links)) else links
+                links.links.map { txt("${it.name} ${Qualities.getStringByInt(it.quality)}") }""", """            val downloadChoices = com.lagradost.cloudstream3.utils.downloader.DownloadChoices
+            val selected = if (forDownload) links.copy(links = downloadChoices.select(links.links)
+                .let { offers -> if (forBatch) offers.filter { downloadChoices.batchChoice(it) != null } else offers }) else links
+            if (forBatch && selected.links.isEmpty()) {
+                showToast(R.string.no_links_found_toast, Toast.LENGTH_SHORT)
+                return@loadLinks
+            }
             postPopup(
                 text,
                 selected.links.map { txt("${it.name} ${Qualities.getStringByInt(it.quality)}") }""")
@@ -286,6 +331,25 @@ dependencies {
     }
 
     private fun acquireSingleSubtitle""")
+    text = replace_once(text, "    private var currentLoadLinkJob: Job? = null", """    fun chooseBatchDownload(episodes: List<ResultEpisode>) {
+        val first = episodes.firstOrNull() ?: return
+        val response = currentResponse ?: return
+        acquireSingleLink(first, LOADTYPE_INAPP_DOWNLOAD, txt(R.string.episode_action_download_mirror),
+            forDownload = true, forBatch = true) { (result, index) ->
+            val choice = com.lagradost.cloudstream3.utils.downloader.DownloadChoices.batchChoice(result.links[index])
+                ?: return@acquireSingleLink
+            episodes.forEach { episode ->
+                DownloadQueueManager.addToQueue(
+                    DownloadObjects.DownloadQueueItem(
+                        episode, response.isMovie(), response.name, response.type, response.posterUrl,
+                        response.apiName, response.getId(), response.url, batchChoice = choice
+                    ).toWrapper()
+                )
+            }
+        }
+    }
+
+    private var currentLoadLinkJob: Job? = null""")
     changes[path] = replace_once(text, "                    txt(R.string.episode_action_download_mirror)\n                ) { (result, index) ->",
         "                    txt(R.string.episode_action_download_mirror),\n                    forDownload = true\n                ) { (result, index) ->")
 
