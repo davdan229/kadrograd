@@ -15,9 +15,12 @@ class ZonaTracksTest {
         assertEquals(2160,wide.playbackQuality)
         assertEquals("3840×1608",wide.dimensions)
         assertEquals(1440,ZonaTracks.Variant(2560,1440).playbackQuality)
+        assertEquals(1440,ZonaTracks.Variant(2560,1080).playbackQuality)
         assertEquals(1080,ZonaTracks.Variant(1920,1080).playbackQuality)
         assertEquals(1080,ZonaTracks.Variant(1920,800).playbackQuality)
         assertEquals(720,ZonaTracks.Variant(1920,720).playbackQuality)
+        assertEquals(720,ZonaTracks.Variant(1280,540).playbackQuality)
+        assertEquals("1280×540",ZonaTracks.Variant(1280,540).dimensions)
     }
 
     @Test fun namedVoiceChoicesPreferHighestQualityAndKeepVoicesAvailableOnlyInHls() {

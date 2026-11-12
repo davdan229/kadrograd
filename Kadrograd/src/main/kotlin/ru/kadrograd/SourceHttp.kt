@@ -3,6 +3,7 @@ package ru.kadrograd
 import com.lagradost.cloudstream3.ErrorLoadingException
 import com.lagradost.cloudstream3.app
 import com.lagradost.nicehttp.NiceResponse
+import com.lagradost.nicehttp.Requests
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -15,10 +16,57 @@ import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.Request
 import okhttp3.Response
+import okhttp3.ResponseBody
+import okio.ForwardingSource
+import okio.buffer
 
 internal object SourceHttp {
     // NiceHttp takes seconds, whereas coroutine withTimeout takes milliseconds.
     const val REQUEST_SECONDS = 12L
+    private val cancellationChecks = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { work ->
+        Thread(work, "kadrograd-dns-cancel").apply { isDaemon = true }
+    }
+
+    fun client(): okhttp3.OkHttpClient = app.baseClient.let { it.newBuilder().dns(SourceDns(it.dns)).build() }
+    private fun requests() = Requests(baseClient = client(), defaultHeaders = app.defaultHeaders,
+        defaultReferer = app.defaultReferer, defaultCookies = app.defaultCookies, responseParser = app.responseParser,
+        defaultData = app.defaultData, defaultCacheTime = app.defaultCacheTime,
+        defaultCacheTimeUnit = app.defaultCacheTimeUnit, defaultTimeOut = app.defaultTimeOut)
+
+    fun proceed(chain: okhttp3.Interceptor.Chain, request: Request): Response = try {
+        chain.proceed(request)
+    } catch (failure: java.net.UnknownHostException) {
+        if (chain.call().isCanceled()) throw IOException("Canceled", failure)
+        val builder = client().newBuilder()
+            .connectTimeout(chain.connectTimeoutMillis().toLong(), TimeUnit.MILLISECONDS)
+            .readTimeout(chain.readTimeoutMillis().toLong(), TimeUnit.MILLISECONDS)
+            .writeTimeout(chain.writeTimeoutMillis().toLong(), TimeUnit.MILLISECONDS)
+        val timeout = chain.call().timeout().timeoutNanos()
+        if (timeout > 0) builder.callTimeout(timeout, TimeUnit.NANOSECONDS)
+        val call = builder.build().newCall(request)
+        val cancellation = cancellationChecks.scheduleAtFixedRate({
+            if (chain.call().isCanceled()) call.cancel()
+        }, 100, 100, TimeUnit.MILLISECONDS)
+        try {
+            val response = call.execute()
+            val body = response.body
+            response.newBuilder().body(object : ResponseBody() {
+                override fun contentType() = body.contentType()
+                override fun contentLength() = body.contentLength()
+                private val tracked by lazy {
+                    object : ForwardingSource(body.source()) {
+                        override fun close() {
+                            try { super.close() } finally { cancellation.cancel(false) }
+                        }
+                    }.buffer()
+                }
+                override fun source() = tracked
+            }).build()
+        } catch (error: Exception) {
+            cancellation.cancel(false)
+            throw error
+        }
+    }
 
     /** The whole response stays cancellable when an alternate endpoint wins. */
     suspend fun <T : Any> readEndpoint(url: String, headers: Map<String,String>, timeoutSeconds: Long,
@@ -27,7 +75,7 @@ internal object SourceHttp {
             if (head) head()
             headers.forEach { (name,value) -> header(name,value) }
         }.build()
-        val call = app.baseClient.newBuilder().callTimeout(timeoutSeconds,TimeUnit.SECONDS).build().newCall(request)
+        val call = client().newBuilder().callTimeout(timeoutSeconds,TimeUnit.SECONDS).build().newCall(request)
         continuation.invokeOnCancellation { call.cancel() }
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
@@ -61,7 +109,7 @@ internal object SourceHttp {
     suspend fun get(source: String, url: String, referer: String? = null,
         headers: Map<String, String> = emptyMap(), timeoutSeconds: Long = REQUEST_SECONDS): NiceResponse {
         require(timeoutSeconds in 1..45)
-        return request(source, timeoutSeconds) { app.get(url, referer = referer, headers = headers, timeout = timeoutSeconds) }
+        return request(source, timeoutSeconds) { requests().get(url, referer = referer, headers = headers, timeout = timeoutSeconds) }
     }
 
     /** A transient catalogue failure can be retried once without increasing the normal wait budget. */
@@ -75,7 +123,7 @@ internal object SourceHttp {
         withTimeoutOrNull((REQUEST_SECONDS + 1) * 1_000) {
             for (attempt in 0..1) {
                 try {
-                    val response = app.get(url, referer = referer, headers = headers, timeout = if (attempt == 0) 6 else 5)
+                    val response = requests().get(url, referer = referer, headers = headers, timeout = if (attempt == 0) 6 else 5)
                     val text = response.okhttpResponse.use { raw ->
                         when {
                             raw.isSuccessful -> withContext(Dispatchers.IO) { response.text }
@@ -97,7 +145,7 @@ internal object SourceHttp {
     suspend fun post(source: String, url: String, data: Map<String, String>, timeoutSeconds: Long = REQUEST_SECONDS,
         headers: Map<String,String> = emptyMap(), referer: String? = null): NiceResponse {
         require(timeoutSeconds in 1..45)
-        return request(source, timeoutSeconds) { app.post(url, data = data, timeout = timeoutSeconds, headers = headers, referer = referer) }
+        return request(source, timeoutSeconds) { requests().post(url, data = data, timeout = timeoutSeconds, headers = headers, referer = referer) }
     }
 
     suspend fun accessibleMp4(url: String, referer: String): Boolean = try {

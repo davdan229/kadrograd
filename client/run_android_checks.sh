@@ -55,6 +55,12 @@ verify_offline_restart() {
   adb shell svc data enable
   grep -q 'OK (1 test)' "$results/offline-restart.txt" || status=1
 }
+verify_crash_recovery() {
+  # This deliberately crashes only the remote CI emulator process.
+  timeout 45 adb shell am instrument -w -r -e class 'com.lagradost.cloudstream3.DownloadCrashRecoveryTest#recordQueueAndTriggerNativeCrash' ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/intentional-crash.txt" || true
+  timeout 90 adb shell am instrument -w -r -e class 'com.lagradost.cloudstream3.DownloadCrashRecoveryTest#queueCanBeCancelledAfterNativeCrashWithoutRestartingIt' ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/crash-recovery.txt" || status=1
+  grep -q 'OK (1 test)' "$results/crash-recovery.txt" || status=1
+}
 test_apk="$checkout/app/build/outputs/apk/androidTest/stable/release/app-stable-release-androidTest.apk"
 if [ -n "${KADROGRAD_UPGRADE_FROM:-}" ]; then
   curl --fail --location --retry 2 --max-time 90 "$KADROGRAD_UPGRADE_FROM" --output "$RUNNER_TEMP/kadrograd-previous.apk"
@@ -83,6 +89,7 @@ if [ "$check_suite" != all ]; then
   timeout 180 adb shell am instrument -w -r -e keepOfflineFixture true -e class "$classes" ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/selected-instrumentation.txt" || status=1
   grep -q "$expected" "$results/selected-instrumentation.txt" || status=1
   if [ "$check_suite" = ui ] && [ "$status" = 0 ]; then verify_offline_restart; fi
+  if [ "$check_suite" = ui ] && [ "$status" = 0 ]; then verify_crash_recovery; fi
   if [ "$status" != 0 ]; then
     timeout 10 adb shell dumpsys activity lastanr > "$results/last-anr.txt" 2>&1 || true
     timeout 10 adb shell dumpsys activity activities > "$results/activities.txt" 2>&1 || true
@@ -102,6 +109,7 @@ timeout 300 adb shell am instrument -w -r -e keepOfflineFixture true -e class co
 grep -q 'OK (8 tests)' "$results/instrumentation.txt" || status=1
 if grep -q 'FAILURES!!!' "$results/instrumentation.txt"; then status=1; fi
 if [ "$status" = 0 ]; then verify_offline_restart; fi
+if [ "$status" = 0 ]; then verify_crash_recovery; fi
 adb shell am instrument -w -r -e class com.lagradost.cloudstream3.KadrogradHomeTest ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/home-instrumentation.txt" || status=1
 if ! adb pull /sdcard/Android/data/ru.kadrograd.cloudstream/files/android-checks "$results/"; then
   if adb root && timeout 20 adb wait-for-device; then

@@ -9,6 +9,35 @@ import org.junit.Test
 import java.util.concurrent.TimeUnit
 
 class SourceHttpTest {
+    @Test fun cancelledPlaybackAlsoCancelsTheDnsFallbackConnection() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse.Builder().body("delayed segment").bodyDelay(4, TimeUnit.SECONDS).build())
+            server.start()
+            val request = okhttp3.Request.Builder().url(server.url("/segment")).build()
+            val original = okhttp3.OkHttpClient().newCall(request)
+            val chain = object : okhttp3.Interceptor.Chain {
+                override fun request() = request
+                override fun proceed(request: okhttp3.Request): okhttp3.Response = throw java.net.UnknownHostException("fixture")
+                override fun connection(): okhttp3.Connection? = null
+                override fun call() = original
+                override fun connectTimeoutMillis() = 1000
+                override fun readTimeoutMillis() = 5000
+                override fun writeTimeoutMillis() = 1000
+                override fun withConnectTimeout(timeout: Int, unit: TimeUnit) = this
+                override fun withReadTimeout(timeout: Int, unit: TimeUnit) = this
+                override fun withWriteTimeout(timeout: Int, unit: TimeUnit) = this
+            }
+            val response = withContext(Dispatchers.IO) { SourceHttp.proceed(chain, request) }
+            val reading = async(Dispatchers.IO) {
+                response.use {
+                    try { it.body.string(); false } catch (_: java.io.IOException) { true }
+                }
+            }
+            delay(100)
+            original.cancel()
+            assertTrue(withTimeout(1_500) { reading.await() })
+        }
+    }
     @Test fun catalogRetriesTransientGatewayFailureOnce() = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(MockResponse.Builder().code(502).body("Bad gateway").build())

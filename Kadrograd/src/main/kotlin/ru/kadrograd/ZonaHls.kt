@@ -44,8 +44,10 @@ internal object ZonaHls {
     fun labels(master: Master, names: List<String>): Map<String,String> {
         val used = mutableMapOf<String,MutableSet<String>>()
         return master.audio.mapNotNull { track ->
-            val slot = Regex("(\\d+)$").find(track.attributes["NAME"].orEmpty())?.value?.toIntOrNull() ?: return@mapNotNull null
-            val original = names.getOrNull(slot)?.takeIf { it.isNotBlank() && it != "delete" } ?: return@mapNotNull null
+            val published = track.attributes["NAME"].orEmpty()
+            val slot = Regex("(\\d+)$").find(published)?.value?.toIntOrNull()
+            val original = (slot?.let(names::getOrNull) ?: names.firstOrNull { it == published } ?: names.singleOrNull())
+                ?.takeIf { it.isNotBlank() && it != "delete" } ?: return@mapNotNull null
             val label = original.replace('"','\'').replace('\r',' ').replace('\n',' ')
             val group = used.getOrPut(track.attributes["GROUP-ID"].orEmpty()) { mutableSetOf() }
             var unique = label
@@ -95,7 +97,7 @@ internal object ZonaHls {
         return output.joinToString("\n",postfix="\n")
     }
 
-    private suspend fun probe(url: String, context: ZonaTracks.Context): Boolean = try {
+    private suspend fun probe(url: String, context: ZonaTracks.Context, onFailure: (Exception) -> Unit): Boolean = try {
         val headers = mapOf("User-Agent" to context.agent)
         val text = SourceHttp.get("Zona",context.transform(url),headers=headers,timeoutSeconds=4).text
         require(text.trimStart().startsWith("#EXTM3U") && text.contains("#EXTINF:"))
@@ -114,9 +116,10 @@ internal object ZonaHls {
         }
         true
     } catch (cancelled: CancellationException) { throw cancelled }
-      catch (_: Exception) { false }
+      catch (failure: Exception) { onFailure(failure); false }
 
-    suspend fun load(url: String, context: ZonaTracks.Context, names: List<String>, subtitles: List<ZonaTracks.Sub>): ZonaTracks.Found = coroutineScope {
+    suspend fun load(url: String, context: ZonaTracks.Context, names: List<String>, subtitles: List<ZonaTracks.Sub>,
+        onFailure: (Exception) -> Unit = {}): ZonaTracks.Found = coroutineScope {
         val hls = context.copy(kind="zona-hls-v1",media=url)
         val text = SourceHttp.get("Zona",hls.transform(url),headers=mapOf("User-Agent" to hls.agent),timeoutSeconds=6).text
         val master = parse(text,url)
@@ -134,7 +137,7 @@ internal object ZonaHls {
             if (audio.none { track -> video.any { (labels.getValue(track.key) to it.variant) !in covered } }) continue
             suspend fun checkGroup() = coroutineScope {
                 (video.map { it.url }+audio.map { it.url }).distinct().map { target ->
-                    async { limit.withPermit { target to probe(target,hls) } }
+                    async { limit.withPermit { target to probe(target,hls,onFailure) } }
                 }.map { it.await() }.toMap()
             }
             val results = if (videos.isEmpty()) checkGroup() else withTimeoutOrNull(5_000) { checkGroup() } ?: break

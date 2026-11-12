@@ -1,15 +1,13 @@
 package com.lagradost.cloudstream3.utils.downloader
 
-import android.media.MediaCodec
-import android.media.MediaMuxer
-import android.os.Build
 import androidx.media3.common.C
 import androidx.media3.common.Format
 import androidx.media3.common.Metadata
 import androidx.media3.common.MimeTypes
-import androidx.media3.common.util.MediaFormatUtil
 import androidx.media3.muxer.BufferInfo
 import androidx.media3.muxer.Muxer
+import androidx.media3.muxer.SeekableMuxerOutput
+import androidx.media3.muxer.WebmMuxer
 import androidx.media3.transformer.InAppMp4Muxer
 import com.google.common.collect.ImmutableList
 import java.nio.ByteBuffer
@@ -31,7 +29,8 @@ internal class AdaptiveMuxer(private val path: String, private val container: (S
     private val formats = mutableListOf<Format>()
     private val metadata = mutableListOf<Metadata.Entry>()
     private var mp4: Muxer? = null
-    private var webm: MediaMuxer? = null
+    private var webm: Muxer? = null
+    private var webmOutput: SeekableMuxerOutput? = null
     private var tracks = emptyList<Int>()
     private var started = false
     private var closed = false
@@ -46,13 +45,13 @@ internal class AdaptiveMuxer(private val path: String, private val container: (S
         check(!closed && formats.isNotEmpty())
         val useWebm = formats.any { it.sampleMimeType in setOf(MimeTypes.VIDEO_VP8, MimeTypes.VIDEO_VP9) }
         if (useWebm) {
-            check(Build.VERSION.SDK_INT >= 29) { "Saving VP9 with Opus requires Android 10 or newer" }
             require(formats.all { it.sampleMimeType in setOf(MimeTypes.VIDEO_VP8, MimeTypes.VIDEO_VP9,
                 MimeTypes.AUDIO_OPUS, MimeTypes.AUDIO_VORBIS) }) { "Unsupported WebM track combination" }
-            val writer = MediaMuxer(path, MediaMuxer.OutputFormat.MUXER_OUTPUT_WEBM)
+            val output = SeekableMuxerOutput.of(path)
+            webmOutput = output
+            val writer = WebmMuxer.Builder(output).build()
             webm = writer
-            tracks = formats.map { writer.addTrack(MediaFormatUtil.createMediaFormatFromFormat(it)) }
-            writer.start()
+            tracks = formats.map(writer::addTrack)
             container("webm")
         } else {
             val writer = InAppMp4Muxer.Factory().create(path)
@@ -67,12 +66,7 @@ internal class AdaptiveMuxer(private val path: String, private val container: (S
     override fun writeSampleData(trackId: Int, byteBuffer: ByteBuffer, bufferInfo: BufferInfo) {
         if (!started) start()
         mp4?.let { it.writeSampleData(tracks[trackId], byteBuffer, bufferInfo); return }
-        val info = MediaCodec.BufferInfo().apply {
-            set(byteBuffer.position(), bufferInfo.size, bufferInfo.presentationTimeUs,
-                (if (bufferInfo.flags and C.BUFFER_FLAG_KEY_FRAME != 0) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0) or
-                    (if (bufferInfo.flags and C.BUFFER_FLAG_END_OF_STREAM != 0) MediaCodec.BUFFER_FLAG_END_OF_STREAM else 0))
-        }
-        webm!!.writeSampleData(tracks[trackId], byteBuffer, info)
+        webm!!.writeSampleData(tracks[trackId], byteBuffer, bufferInfo)
     }
 
     override fun addMetadataEntry(metadataEntry: Metadata.Entry) {
@@ -84,11 +78,8 @@ internal class AdaptiveMuxer(private val path: String, private val container: (S
         closed = true
         try { mp4?.close() }
         finally {
-            val writer = webm
-            if (writer != null) {
-                try { if (started) writer.stop() }
-                finally { writer.release() }
-            }
+            try { webm?.close() }
+            finally { webmOutput?.close() }
         }
     }
 }
