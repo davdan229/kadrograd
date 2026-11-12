@@ -4,6 +4,7 @@ import com.lagradost.cloudstream3.MovieLoadResponse
 import com.lagradost.cloudstream3.AnimeLoadResponse
 import com.lagradost.cloudstream3.TvSeriesLoadResponse
 import com.lagradost.cloudstream3.TvType
+import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import kotlinx.coroutines.runBlocking
 import org.junit.Assume.assumeTrue
@@ -12,6 +13,56 @@ import org.junit.Test
 
 /** Explicit diagnostic: print available resolutions without publishing signed media URLs. */
 class SourceInspectionCheck {
+    @Test fun inspectRequestedSeries() = runBlocking<Unit> {
+        val query = System.getenv("KADROGRAD_INSPECT_SERIES").orEmpty().trim()
+        assumeTrue("Set KADROGRAD_INSPECT_SERIES for a series inspection", query.isNotEmpty())
+        val api: MainAPI = when (System.getenv("KADROGRAD_SERIES_SOURCE") ?: "zona") {
+            "zona" -> ZonaProvider("https://w1.zona.im")
+            "filmix" -> FilmixProvider("https://filmix.gg")
+            "kinovibe" -> VibeProvider("https://kinovibe.cc")
+            else -> error("Unknown source")
+        }
+        fun normalized(value: String) = value.lowercase(java.util.Locale.ROOT).replace('ё', 'е')
+            .replace(Regex("^(мультсериал|сериал)\\s+"), "")
+            .replace(Regex("\\s*\\(\\d{4}(?:\\s*[-–]\\s*\\d{4})?\\)\\s*$"), "")
+            .replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
+        val requestedUrl = System.getenv("KADROGRAD_SERIES_URL")?.takeIf(String::isNotBlank)
+        val url = requestedUrl ?: api.search(query).orEmpty().let { results ->
+            println("Search candidates from ${api.name}: ${results.take(8).map { it.name to it.url }}")
+            results.firstOrNull { normalized(it.name) == normalized(query) }?.url
+        } ?: throw IllegalStateException("Series not found by exact title")
+        val show = api.load(url) as? TvSeriesLoadResponse ?: error("Expected an episodic series")
+        val episodes = show.episodes.sortedWith(compareBy({ it.season ?: 0 }, { it.episode ?: 0 }))
+        fun key(ep: com.lagradost.cloudstream3.Episode) = "${ep.season ?: 0}:${ep.episode ?: 0}"
+        println("Series ${show.name} (${show.year}) $url: ${episodes.map(::key)}")
+        val requested = System.getenv("KADROGRAD_SERIES_EPISODES").orEmpty().split(',').map(String::trim)
+            .filter(String::isNotBlank).distinct()
+        require(requested.size <= 15 && requested.all { Regex("\\d+:\\d+").matches(it) }) {
+            "Select up to 15 season:episode pairs per pass"
+        }
+        val failures = mutableListOf<String>()
+        for (pair in requested) {
+            val episode = episodes.firstOrNull { key(it) == pair }
+            if (episode == null) {
+                failures += "$pair: missing from the catalog"
+                continue
+            }
+            try {
+                val links = java.util.concurrent.ConcurrentLinkedQueue<ExtractorLink>()
+                api.loadLinks(episode.data, false, {}, links::add)
+                val choices = links.map { it.quality to it.name }.distinct().sortedByDescending { it.first }
+                println("Episode $pair: $choices")
+                if (choices.isEmpty()) failures += "$pair: no available streams"
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                val reason = failure.message?.replace(Regex("https?://[^\\s]+"), "<url>")?.take(180)
+                failures += "$pair: ${failure.javaClass.simpleName} $reason"
+            }
+        }
+        assertTrue(failures.joinToString("\n"), failures.isEmpty())
+    }
+
     @Test fun inspectRequestedAnime() = runBlocking<Unit> {
         val query = System.getenv("KADROGRAD_INSPECT_ANIME").orEmpty()
         assumeTrue("Set KADROGRAD_INSPECT_ANIME for anime source inspection", query.isNotBlank())
