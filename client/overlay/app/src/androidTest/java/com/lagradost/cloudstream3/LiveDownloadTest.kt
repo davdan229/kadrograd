@@ -13,6 +13,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.downloader.AdaptiveDownload
 import com.lagradost.cloudstream3.utils.downloader.DownloadChoices
+import com.lagradost.nicehttp.Requests
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -28,6 +29,21 @@ class LiveDownloadTest {
         val query = InstrumentationRegistry.getArguments().getString("movieQuery").orEmpty()
         require(query.isNotBlank()) { "movieQuery is required for the opt-in live transfer" }
         val output = File(context.cacheDir, "live-download-${System.nanoTime()}.media")
+        val previousApp = app
+        app = Requests(baseClient = previousApp.baseClient.newBuilder().addInterceptor { chain ->
+            val host = chain.request().url.host
+            try {
+                chain.proceed(chain.request()).also { response ->
+                    android.util.Log.i("KadrogradDownloadTest", "Source HTTP $host ${response.code}")
+                }
+            } catch (error: java.io.IOException) {
+                android.util.Log.w("KadrogradDownloadTest", "Source HTTP $host ${error.javaClass.simpleName}")
+                throw error
+            }
+        }.build(), defaultHeaders = previousApp.defaultHeaders, defaultReferer = previousApp.defaultReferer,
+            defaultCookies = previousApp.defaultCookies, responseParser = previousApp.responseParser,
+            defaultData = previousApp.defaultData, defaultCacheTime = previousApp.defaultCacheTime,
+            defaultCacheTimeUnit = previousApp.defaultCacheTimeUnit, defaultTimeOut = previousApp.defaultTimeOut)
         try {
             context.getSharedPreferences("rebuild_preference", 0).edit().putString("HAS_DONE_SETUP", "true").commit()
             PreferenceManager.getDefaultSharedPreferences(context).edit()
@@ -43,9 +59,11 @@ class LiveDownloadTest {
                 val links = mutableListOf<ExtractorLink>()
                 provider.loadLinks(movie.dataUrl, false, {}, links::add)
                 val choices = DownloadChoices.select(links)
+                android.util.Log.i("KadrogradDownloadTest", "Available choices: ${choices.map { Triple(it.quality, it.type, it.name) }}")
                 val height = InstrumentationRegistry.getArguments().getString("movieQuality")?.toIntOrNull() ?: 1080
-                val selected = choices.firstOrNull { it.quality == height && it.type == ExtractorLinkType.DASH }
-                    ?: error("No selected DASH quality $height")
+                val selected = choices.firstOrNull { it.quality == height &&
+                    it.type in setOf(ExtractorLinkType.DASH, ExtractorLinkType.M3U8) && provider.getVideoInterceptor(it) != null }
+                    ?: error("No selected adaptive quality $height; available=${choices.map { it.quality to it.type }}")
                 var lastLog = 0L
                 val exported = withTimeout(15 * 60_000L) {
                     AdaptiveDownload.exportToFile(context, selected, output, provider.getVideoInterceptor(selected),
@@ -107,6 +125,6 @@ class LiveDownloadTest {
                     }
                 } finally { instrumentation.runOnMainSync { player?.release() } }
             }
-        } finally { output.delete() }
+        } finally { app = previousApp; output.delete() }
     }
 }
