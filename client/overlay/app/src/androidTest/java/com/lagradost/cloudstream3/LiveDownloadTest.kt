@@ -5,10 +5,10 @@ import android.media.MediaFormat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.preference.PreferenceManager
 import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
 import com.lagradost.cloudstream3.APIHolder.getApiFromNameNull
-import com.lagradost.cloudstream3.plugins.PluginManager
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.downloader.AdaptiveDownload
@@ -29,11 +29,15 @@ class LiveDownloadTest {
         require(query.isNotBlank()) { "movieQuery is required for the opt-in live transfer" }
         val output = File(context.cacheDir, "live-download-${System.nanoTime()}.media")
         try {
+            context.getSharedPreferences("rebuild_preference", 0).edit().putString("HAS_DONE_SETUP", "true").commit()
+            PreferenceManager.getDefaultSharedPreferences(context).edit()
+                .putInt("app_layout_key", 0).putBoolean("auto_update_plugins", false).commit()
             ActivityScenario.launch(MainActivity::class.java).use {
                 withTimeout(60_000) {
-                    while (!PluginManager.loadedOnlinePlugins || getApiFromNameNull("Кадроград · Zona") == null) delay(100)
+                    while (getApiFromNameNull("Кадроград · Zona") == null) delay(100)
                 }
                 val provider = checkNotNull(getApiFromNameNull("Кадроград · Zona"))
+                assertTrue(provider.hasDownloadSupport)
                 val hit = checkNotNull(provider.search(query)?.firstOrNull { it.name.equals(query, true) }) { "Exact movie not found" }
                 val movie = provider.load(hit.url) as? MovieLoadResponse ?: error("Expected a movie")
                 val links = mutableListOf<ExtractorLink>()
