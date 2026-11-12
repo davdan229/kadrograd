@@ -475,6 +475,79 @@ class AdaptiveDownloadTest {
         }
     }
 
+    @Test fun batchButtonAppliesChosenQualityAndVoiceToTheDisplayedEpisodes() = runBlocking<Unit> {
+        FixtureServer().use { server ->
+            val preferences = PreferenceManager.getDefaultSharedPreferences(context)
+            val pathKey = context.getString(R.string.download_path_key)
+            val previous = preferences.getString(pathKey, null)
+            val directory = File(context.getExternalFilesDir(null), "batch-ui-${System.nanoTime()}").apply { mkdirs() }
+            preferences.edit().putString(pathKey, directory.absolutePath).putInt("app_layout_key", 0).commit()
+            context.getSharedPreferences("rebuild_preference", 0).edit().putString("HAS_DONE_SETUP", "true").commit()
+            val provider = object : MainAPI() {
+                override var name = "Batch download fixture"
+                override var mainUrl = server.origin
+                override val hasDownloadSupport = true
+                override val supportedTypes = setOf(TvType.TvSeries)
+                override suspend fun load(url: String): LoadResponse = newTvSeriesLoadResponse(
+                    "Batch fixture", url, TvType.TvSeries, (1..2).map { number ->
+                        newEpisode("episode-$number") { episode = number; season = 1 }
+                    })
+
+                override fun getVideoInterceptor(extractorLink: com.lagradost.cloudstream3.utils.ExtractorLink) =
+                    selection(extractorLink.quality, if (extractorLink.name.contains("Studio B")) 4 else 3)
+
+                override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit,
+                    callback: (com.lagradost.cloudstream3.utils.ExtractorLink) -> Unit): Boolean {
+                    for (height in listOf(720, 1080)) for (voice in listOf("Studio A", "Studio B")) {
+                        callback(newExtractorLink(name, "$voice · $height", "${server.origin}/dash/manifest.mpd?$data#$height-$voice", ExtractorLinkType.DASH) {
+                            quality = height
+                        })
+                    }
+                    return true
+                }
+            }
+            val completed = ConcurrentLinkedQueue<Int>()
+            val statusListener: (Pair<Int, VideoDownloadManager.DownloadType>) -> Unit = { (id, state) ->
+                if (state == VideoDownloadManager.DownloadType.IsDone) completed.add(id)
+            }
+            VideoDownloadManager.downloadStatusEvent += statusListener
+            try {
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    withTimeout(30_000) {
+                        while (!PluginManager.loadedOnlinePlugins || !PluginManager.loadedLocalPlugins) delay(100)
+                    }
+                    APIHolder.addPluginMapping(provider)
+                    scenario.onActivity { it.loadResult("${server.origin}/series", provider.name, "Batch fixture") }
+                    withTimeout(20_000) {
+                        while (true) {
+                            var ready = false
+                            scenario.onActivity { ready = it.findViewById<View>(R.id.result_batch_download_button)?.isShown == true }
+                            if (ready) break
+                            delay(100)
+                        }
+                    }
+                    onView(withId(R.id.result_batch_download_button)).perform(click())
+                    onView(withText(R.string.yes)).inRoot(isDialog()).perform(click())
+                    revealChoice("Studio B · 1080")
+                    assertTrue(server.requests.isEmpty())
+                    onView(allOf(withText(containsString("Studio B · 1080")), isCompletelyDisplayed())).inRoot(isDialog()).perform(click())
+                    withTimeout(60_000) { while (completed.distinct().size != 2) delay(100) }
+                    val files = directory.walkTopDown().filter { it.isFile }.toList()
+                    assertEquals(2, files.size)
+                    files.forEach { assertTracks(it, 1920, 1080) }
+                    assertEquals(2, server.requests.count { it.endsWith("/init-4.webm") })
+                    assertFalse(server.requests.any { it.endsWith("/init-3.webm") || it.endsWith("/init-5.webm") })
+                }
+            } finally {
+                VideoDownloadManager.downloadStatusEvent -= statusListener
+                completed.distinct().forEach { CloudStreamApp.removeKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, it.toString()) }
+                APIHolder.removePluginMapping(provider)
+                preferences.edit().apply { if (previous == null) remove(pathKey) else putString(pathKey, previous) }.commit()
+                directory.deleteRecursively()
+            }
+        }
+    }
+
     @Test fun interruptedMediaReadContinuesFromItsReceivedOffset() = runBlocking {
         FixtureServer(disconnectOn = "/chunk-0-").use { server ->
             val output = File.createTempFile("adaptive-range-retry-", ".webm", context.cacheDir)
