@@ -87,7 +87,10 @@ dependencies {
     path = BASE + "utils/downloader/DownloadManager.kt"
     text = replace_once(changes[path], " || link.type == ExtractorLinkType.DASH", " /* DASH is handled by AdaptiveDownload below. */")
     text = replace_once(text, "            if (total <= 0) return null// crash, invalid data", "            // Adaptive exports can start before a size estimate is available.")
-    text = replace_once(text, """                builder.setProgress((total / 1000).toInt(), (progress / 1000).toInt(), false)""", """                if (total > 0) {
+    text = replace_once(text, """                builder.setProgress((total / 1000).toInt(), (progress / 1000).toInt(), false)""", """                val adaptiveProgress = AdaptiveDownload.progressPercentage(ep.id)
+                if (adaptiveProgress != null) {
+                    builder.setProgress(100, adaptiveProgress, false)
+                } else if (total > 0) {
                     builder.setProgress((total / 1000).coerceAtLeast(1).toInt(), (progress / 1000).toInt(), false)
                 } else builder.setProgress(0, 0, true)""")
     text = replace_once(text, "                    progressPercentage = progress * 100 / total", "                    progressPercentage = if (total > 0) progress * 100 / total else 0")
@@ -108,6 +111,14 @@ dependencies {
     ): DownloadedFileInfoResult? {
         AdaptiveDownload.activeFileInfo(id)?.let { return it }
         try {""")
+    text = replace_once(text, """            return DownloadedFileInfoResult(
+                file.lengthOrThrow(),
+                info.totalBytes,
+                file.uriOrThrow()
+            )""", """            val length = file.lengthOrThrow()
+            val uri = file.uriOrThrow()
+            val checked = DownloadRecordRepair.reconcile(context, id, info, uri, length)
+            return DownloadedFileInfoResult(length, checked.totalBytes, uri)""")
     text = replace_once(text, '                        "mp4",\n                        tryResume,',
         '                        if (link.url.toUri().lastPathSegment?.endsWith(".webm", ignoreCase = true) == true) "webm" else "mp4",\n                        tryResume,')
     text = replace_once(text, "            when (link.type) {\n                ExtractorLinkType.M3U8 -> {", """            if (link.type == ExtractorLinkType.DASH ||

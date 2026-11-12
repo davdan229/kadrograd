@@ -223,6 +223,9 @@ object AdaptiveDownload {
             .setAssetLoaderFactory(loader)
             .setMuxerFactory(AdaptiveMuxer.Factory(container))
             .setEncoderFactory(copyOnlyEncoder)
+            // Transformer assumes a local export and aborts after a 10-second sample gap on phones.
+            // Remote transfers and an explicit pause need their own cancellable inactivity limit.
+            .setMaxDelayBetweenMuxerSamplesMs(C.TIME_UNSET)
             .addListener(object : Transformer.Listener {
                 override fun onCompleted(composition: Composition, exportResult: ExportResult) {
                     if (exportResult.videoFrameCount <= 0 || exportResult.audioMimeType == null) {
@@ -241,15 +244,26 @@ object AdaptiveDownload {
             val holder = ProgressHolder()
             var lastProgress = -1
             var lastReport = 0L
+            var lastActivity = SystemClock.elapsedRealtime()
+            var lastBytes = 0L
+            var lastOutputSize = 0L
             while (!finished.isCompleted) {
                 coroutineContext.ensureActive()
                 if (!keepRunning()) return@withContext false
                 gate.pause(isPaused())
+                val now = SystemClock.elapsedRealtime()
+                val bytes = transferred.get()
+                val outputSize = output.length()
+                if (gate.paused || bytes != lastBytes || outputSize != lastOutputSize) lastActivity = now
+                lastBytes = bytes
+                lastOutputSize = outputSize
+                if (!gate.paused && now - lastActivity > 120_000) {
+                    throw SocketTimeoutException("Adaptive download made no progress for two minutes")
+                }
                 if (!gate.paused) {
                     val available = transformer.getProgress(holder) == Transformer.PROGRESS_STATE_AVAILABLE
                     val changed = available && holder.progress != lastProgress
                     if (changed) lastProgress = holder.progress
-                    val now = SystemClock.elapsedRealtime()
                     if (changed || now - lastReport >= 1_000) {
                         lastReport = now
                         progress(lastProgress.coerceIn(0, 99), transferred.get(), estimate.bytes)

@@ -510,6 +510,24 @@ class AdaptiveDownloadTest {
         } }
     }
 
+    @Test fun aNetworkWaitDoesNotTriggerTheLocalExportWatchdog() = runBlocking {
+        val delayed = AtomicBoolean(false)
+        FixtureServer { path ->
+            if (path.contains("/chunk-1-00002.") && delayed.compareAndSet(false, true)) {
+                Thread.sleep(28_000)
+            }
+        }.use { server ->
+            val output = File.createTempFile("adaptive-network-wait-", ".webm", context.cacheDir)
+            try {
+                val link = newExtractorLink("Fixture", "Studio B", "${server.origin}/dash/manifest.mpd", ExtractorLinkType.DASH) { quality = 1080 }
+                assertTrue(withTimeout(90_000) { AdaptiveDownload.exportToFile(context, link, output, selection(1080, 4)) })
+                assertTrue(delayed.get())
+                assertTracks(output, 1920, 1080)
+                assertEquals(1, server.requests.count { it.endsWith("manifest.mpd") })
+            } finally { output.delete() }
+        }
+    }
+
     @Test fun hlsWithSeparateAudioSavesTheSelectedVoice() = runBlocking {
         FixtureServer().use { server ->
             val output = File.createTempFile("adaptive-hls-", ".mp4", context.cacheDir)
@@ -638,6 +656,26 @@ class AdaptiveDownloadTest {
                 val saved = CloudStreamApp.getKey<DownloadObjects.DownloadedFileInfo>(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString())
                 assertEquals(file.name, saved?.displayName)
                 assertEquals(file.length(), saved?.totalBytes)
+                val originalBytes = file.readBytes()
+                val inflated = requireNotNull(saved).copy(totalBytes = file.length() + 1_000_000)
+                CloudStreamApp.setKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString(), inflated)
+                val repaired = VideoDownloadManager.getDownloadFileInfo(context, id)
+                assertEquals(file.length(), repaired?.totalBytes)
+                assertEquals(file.length(), repaired?.fileLength)
+                assertArrayEquals("Repair changed the saved movie", originalBytes, file.readBytes())
+                val brokenId = id + 100
+                val broken = File(directory, "Broken [$brokenId-${System.currentTimeMillis()}].webm")
+                broken.writeBytes(originalBytes.copyOf(originalBytes.size / 2))
+                try {
+                    CloudStreamApp.setKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, brokenId.toString(), inflated.copy(
+                        displayName = broken.name, totalBytes = file.length()))
+                    val incomplete = VideoDownloadManager.getDownloadFileInfo(context, brokenId)
+                    assertEquals("A truncated movie was incorrectly marked complete", file.length(), incomplete?.totalBytes)
+                    assertTrue(requireNotNull(incomplete).fileLength < incomplete.totalBytes)
+                } finally {
+                    CloudStreamApp.removeKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, brokenId.toString())
+                    broken.delete()
+                }
                 assertTrue(File(context.filesDir, "adaptive-downloads").listFiles().orEmpty().isEmpty())
             } finally {
                 APIHolder.removePluginMapping(provider)
