@@ -10,6 +10,9 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.TransferListener
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.navigation.fragment.NavHostFragment
@@ -41,6 +44,7 @@ import org.hamcrest.Matchers.allOf
 import org.hamcrest.Matchers.containsString
 import org.hamcrest.Matchers.instanceOf
 import java.io.File
+import java.util.concurrent.atomic.AtomicLong
 
 class KadrogradHomeTest {
     @Test fun sourcePickerListsAllBundledSourcesAndKeepsLaterFilterChanges() = runBlocking<Unit> {
@@ -166,9 +170,27 @@ class KadrogradHomeTest {
         val links = mutableListOf<ExtractorLink>()
         api.loadLinks(movie.dataUrl, false, {}, links::add)
         val link = links.single { it.quality == 2160 && it.name.startsWith("Blender Foundation") }
+        val transferred = AtomicLong()
+        val transfer = object : TransferListener {
+            override fun onTransferInitializing(source: DataSource, spec: DataSpec, network: Boolean) {
+                android.util.Log.i("KadrogradUhdTest", "Opening ${spec.uri.host} at ${spec.position}, length=${spec.length}")
+            }
+            override fun onTransferStart(source: DataSource, spec: DataSpec, network: Boolean) {
+                android.util.Log.i("KadrogradUhdTest", "Started at ${spec.position}, length=${spec.length}")
+            }
+            override fun onBytesTransferred(source: DataSource, spec: DataSpec, network: Boolean, count: Int) {
+                val total = transferred.addAndGet(count.toLong())
+                if (total / 1_048_576 != (total - count) / 1_048_576) {
+                    android.util.Log.i("KadrogradUhdTest", "Received $total bytes")
+                }
+            }
+            override fun onTransferEnd(source: DataSource, spec: DataSpec, network: Boolean) {
+                android.util.Log.i("KadrogradUhdTest", "Closed at ${spec.position}, received=${transferred.get()}")
+            }
+        }
         val source = ProgressiveMediaSource.Factory(
             DefaultHttpDataSource.Factory().setDefaultRequestProperties(link.headers).setConnectTimeoutMs(8_000)
-                .setReadTimeoutMs(8_000)
+                .setReadTimeoutMs(8_000).setTransferListener(transfer)
         ).createMediaSource(MediaItem.fromUri(link.url))
         val firstFrame = CompletableDeferred<VideoSize>()
         val reader = ImageReader.newInstance(3840, 1714, ImageFormat.PRIVATE, 2)
@@ -178,6 +200,12 @@ class KadrogradHomeTest {
                 val active = ExoPlayer.Builder(instrumentation.targetContext).build()
                 player = active
                 active.addListener(object : Player.Listener {
+                    override fun onPlaybackStateChanged(playbackState: Int) {
+                        android.util.Log.i("KadrogradUhdTest", "Playback state=$playbackState, buffered=${active.bufferedPosition}, received=${transferred.get()}")
+                    }
+                    override fun onVideoSizeChanged(videoSize: VideoSize) {
+                        android.util.Log.i("KadrogradUhdTest", "Video size=${videoSize.width}x${videoSize.height}")
+                    }
                     override fun onRenderedFirstFrame() {
                         firstFrame.complete(active.videoSize)
                     }

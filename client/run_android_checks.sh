@@ -41,7 +41,7 @@ adb shell settings put global window_animation_scale 0
 adb shell settings put global transition_animation_scale 0
 adb shell settings put global animator_duration_scale 0
 adb logcat -c
-adb logcat -v threadtime '*:W' 'TestRunner:I' 'KadrogradDownloadTest:I' > "$results/logcat.txt" 2>&1 &
+adb logcat -v threadtime '*:W' 'TestRunner:I' 'KadrogradDownloadTest:I' 'KadrogradUhdTest:I' > "$results/logcat.txt" 2>&1 &
 logcat_pid=$!
 status=0
 verify_offline_restart() {
