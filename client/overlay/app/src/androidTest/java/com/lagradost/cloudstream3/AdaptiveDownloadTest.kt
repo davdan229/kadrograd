@@ -47,6 +47,8 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.Before
+import org.junit.After
 import org.hamcrest.Matchers.allOf
 import org.hamcrest.Matchers.containsString
 import java.io.File
@@ -57,10 +59,32 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.Locale
 
 class AdaptiveDownloadTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
     private val context get() = instrumentation.targetContext
+    private var previousLocale: Locale? = null
+    private var previousLanguage: String? = null
+
+    @Before fun useRussianInterface() {
+        previousLocale = Locale.getDefault()
+        val preferences = PreferenceManager.getDefaultSharedPreferences(context)
+        val key = context.getString(R.string.locale_key)
+        previousLanguage = preferences.getString(key, null)
+        preferences.edit().putString(key, "ru").commit()
+        CommonActivity.setLocale(context, "ru")
+        assertEquals("ru", context.resources.configuration.locales[0].language)
+    }
+
+    @After fun restoreLanguage() {
+        val preferences = PreferenceManager.getDefaultSharedPreferences(context)
+        val key = context.getString(R.string.locale_key)
+        preferences.edit().apply {
+            previousLanguage?.let { putString(key, it) } ?: remove(key)
+        }.commit()
+        previousLocale?.let { CommonActivity.setLocale(context, it.toLanguageTag()) }
+    }
 
     private fun shell(command: String) {
         ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(command))
