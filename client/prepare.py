@@ -22,6 +22,8 @@ HASHES = {
     BASE + "ui/download/button/DownloadButton.kt": "e27c51f8d32d0a9177869c4dc593f857a53a16a49e57d1315316f40e2fb9fc61",
     BASE + "ui/download/button/PieFetchButton.kt": "49262fe36f907a69ad590e1f8ff4591b8b6c25bc40308c74d614a81a45048a6f",
     BASE + "ui/download/DownloadViewModel.kt": "952dcd894d809147abe8adcd448ff4036ea53980d34c98eb381371302319991c",
+    BASE + "utils/downloader/DownloadQueueManager.kt": "b15301122cb1a64992e9bbf07cf5ba81d2e225ad6dd3e779d5aa8e5e3fb4c94c",
+    BASE + "services/DownloadQueueService.kt": "a6b252d201c93fd27a349d6963225e5a51f1ca410cf25fc9bb433636b6a91240",
 }
 
 
@@ -113,6 +115,35 @@ dependencies {
                 ExtractorLinkType.M3U8 -> {""")
     changes[path] = replace_once(text, "        } catch (_: Throwable) {\n            return DOWNLOAD_FAILED\n        } finally {\n            extractorJob.cancel()",
         "        } catch (cancelled: CancellationException) {\n            throw cancelled\n        } catch (_: Throwable) {\n            return DOWNLOAD_FAILED\n        } finally {\n            extractorJob.cancel()")
+
+    path = BASE + "utils/downloader/DownloadQueueManager.kt"
+    text = replace_once(changes[path], """            newQueue.forEach { obj ->
+                setQueueStatus(obj.id, VideoDownloadManager.DownloadType.IsPending)
+            }
+
+            if (newQueue.any()) {""", """            if (DownloadRecovery.holdRestoredQueue(context)) {
+                newQueue.forEach { obj -> setQueueStatus(obj.id, VideoDownloadManager.DownloadType.IsPaused) }
+                return@startQueue
+            }
+            newQueue.forEach { obj ->
+                setQueueStatus(obj.id, VideoDownloadManager.DownloadType.IsPending)
+            }
+
+            if (newQueue.any()) {""")
+    changes[path] = replace_once(text, """        if (add(downloadQueueWrapper)) {""", """        DownloadRecovery.allowUserRequest(context)
+        if (add(downloadQueueWrapper)) {""")
+
+    path = BASE + "services/DownloadQueueService.kt"
+    text = replace_once(changes[path], """    override fun onCreate() {
+        isRunning = true""", """    override fun onCreate() {
+        if (com.lagradost.cloudstream3.utils.downloader.DownloadRecovery.holdRestoredQueue(this)) {
+            stopSelf()
+            return
+        }
+        isRunning = true""")
+    changes[path] = replace_once(text, """        return START_STICKY // We want the service restarted if its killed""", """        return if (com.lagradost.cloudstream3.utils.downloader.DownloadRecovery.holdRestoredQueue(this)) {
+            START_NOT_STICKY
+        } else START_STICKY""")
 
     path = BASE + "ui/download/DownloadViewModel.kt"
     text = replace_once(changes[path], "            if (childFile.fileLength <= 1) return@forEach", """            if (childFile.fileLength <= 1 &&
