@@ -60,6 +60,10 @@ class LiveDownloadTest {
                     val formats = (0 until extractor.trackCount).map(extractor::getTrackFormat)
                     val video = formats.single { it.getString(MediaFormat.KEY_MIME)!!.startsWith("video/") }
                     assertTrue(video.getLong(MediaFormat.KEY_DURATION) > 60 * 60_000_000L)
+                    movie.duration?.takeIf { it > 0 }?.let { minutes ->
+                        assertTrue("The saved movie ends before its catalog duration",
+                            video.getLong(MediaFormat.KEY_DURATION) >= (minutes - 3).coerceAtLeast(1) * 60_000_000L)
+                    }
                     assertEquals(1, formats.count { it.getString(MediaFormat.KEY_MIME)!!.startsWith("audio/") })
                     android.util.Log.i("KadrogradDownloadTest", "Completed full movie: ${output.length()} bytes, duration=${video.getLong(MediaFormat.KEY_DURATION)}, height=${video.getInteger(MediaFormat.KEY_HEIGHT)}")
                 } finally { extractor.release() }
