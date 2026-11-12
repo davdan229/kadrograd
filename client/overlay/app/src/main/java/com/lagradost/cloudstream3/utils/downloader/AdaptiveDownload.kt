@@ -12,6 +12,8 @@ import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.TransferListener
+import androidx.media3.datasource.HttpDataSource
+import androidx.media3.common.C
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.transformer.Codec
@@ -43,6 +45,7 @@ import okhttp3.OkHttpClient
 import java.io.File
 import java.io.IOException
 import java.io.InterruptedIOException
+import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
@@ -51,6 +54,16 @@ import kotlin.coroutines.coroutineContext
 /** Copies clear adaptive streams, preserving compressed audio and video samples. */
 object AdaptiveDownload {
     private val activeFiles = ConcurrentHashMap<Int, DownloadObjects.DownloadedFileInfoResult>()
+    private data class Progress(val percentage: Int, val estimate: Long)
+    private val activeProgress = ConcurrentHashMap<Int, Progress>()
+
+    internal fun progressPercentage(id: Int?): Int? = id?.let { activeProgress[it]?.percentage }
+    internal fun progressText(context: Context, id: Int?, downloadedBytes: Long): String? {
+        val progress = id?.let { activeProgress[it] } ?: return null
+        val received = android.text.format.Formatter.formatShortFileSize(context, downloadedBytes)
+        val amount = if (progress.estimate > 0) "$received / ≈${android.text.format.Formatter.formatShortFileSize(context, progress.estimate)}" else received
+        return "${progress.percentage}% · $amount"
+    }
 
     internal fun activeFileInfo(id: Int): DownloadObjects.DownloadedFileInfoResult? = activeFiles[id]
     @JvmStatic fun isSupported(): Boolean = true
@@ -80,18 +93,75 @@ object AdaptiveDownload {
             }
             if (cancelled || Thread.currentThread().isInterrupted) throw InterruptedIOException("Adaptive download cancelled")
         }
+
+        fun retryDelay(milliseconds: Long) = synchronized(monitor) {
+            val deadline = SystemClock.elapsedRealtime() + milliseconds
+            while (!cancelled && SystemClock.elapsedRealtime() < deadline) {
+                try { monitor.wait((deadline - SystemClock.elapsedRealtime()).coerceAtLeast(1)) }
+                catch (interrupted: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw InterruptedIOException("Adaptive download interrupted").apply { initCause(interrupted) }
+                }
+            }
+            awaitReady()
+        }
     }
 
     private class PausableDataSource(private val upstream: DataSource, private val gate: TransferGate) : DataSource by upstream {
-        override fun open(dataSpec: DataSpec): Long {
+        private var spec: DataSpec? = null
+        private var received = 0L
+        private var expected = C.LENGTH_UNSET.toLong()
+        private var attempts = 0
+
+        private fun retry(error: IOException) {
             gate.awaitReady()
-            return upstream.open(dataSpec)
+            if (attempts >= 3 || Thread.currentThread().isInterrupted ||
+                (error is InterruptedIOException && error !is SocketTimeoutException) ||
+                (error is HttpDataSource.InvalidResponseCodeException &&
+                    error.responseCode !in setOf(408, 429) && error.responseCode !in 500..599)) throw error
+            attempts++
+            runCatching { upstream.close() }
+            val retryAfter = (error as? HttpDataSource.InvalidResponseCodeException)?.headerFields?.entries
+                ?.firstOrNull { it.key.equals("Retry-After", true) }?.value?.firstOrNull()?.toLongOrNull()
+            gate.retryDelay(retryAfter?.coerceIn(1, 30)?.times(1_000) ?: (250L shl (attempts - 1)))
+        }
+
+        private fun connect(): Long {
+            while (true) {
+                gate.awaitReady()
+                try { return upstream.open(requireNotNull(spec).subrange(received)) }
+                catch (error: IOException) { retry(error) }
+            }
+        }
+
+        override fun open(dataSpec: DataSpec): Long {
+            spec = dataSpec
+            received = 0
+            attempts = 0
+            expected = connect()
+            return expected
         }
 
         override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
             if (length == 0) return 0
-            gate.awaitReady()
-            return upstream.read(buffer, offset, length)
+            while (true) {
+                gate.awaitReady()
+                if (expected != C.LENGTH_UNSET.toLong() && received >= expected) return C.RESULT_END_OF_INPUT
+                try {
+                    val count = upstream.read(buffer, offset, length)
+                    if (count == C.RESULT_END_OF_INPUT && expected != C.LENGTH_UNSET.toLong() && received < expected) {
+                        throw java.io.EOFException("Media response ended after $received of $expected bytes")
+                    }
+                    if (count > 0) received += count
+                    return count
+                } catch (error: IOException) {
+                    val path = spec?.uri?.path.orEmpty()
+                    // Manifests may change between requests. Resume only the immutable media data.
+                    if (path.endsWith(".mpd") || path.endsWith(".m3u8")) throw error
+                    retry(error)
+                    connect()
+                }
+            }
         }
     }
 
@@ -110,12 +180,20 @@ object AdaptiveDownload {
         interceptor: Interceptor?,
         keepRunning: () -> Boolean = { true },
         isPaused: () -> Boolean = { false },
-        progress: (Int, Long) -> Unit = { _, _ -> },
+        progress: (Int, Long, Long) -> Unit = { _, _, _ -> },
         container: (String) -> Unit = {},
     ): Boolean = withContext(Dispatchers.Main.immediate) {
+        val estimate = AdaptiveSizeEstimate()
         val client = OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
+            .addInterceptor { chain ->
+                val response = chain.proceed(chain.request())
+                if (response.isSuccessful && response.request.url.encodedPath.let { it.endsWith(".mpd") || it.endsWith(".m3u8") }) {
+                    runCatching { estimate.observe(response.request.url.toString(), response.peekBody(1_048_576).string()) }
+                }
+                response
+            }
             .apply { interceptor?.let(::addInterceptor) }
             .build()
         val headers = buildMap {
@@ -174,7 +252,7 @@ object AdaptiveDownload {
                     val now = SystemClock.elapsedRealtime()
                     if (changed || now - lastReport >= 1_000) {
                         lastReport = now
-                        progress(lastProgress.coerceIn(0, 99), transferred.get())
+                        progress(lastProgress.coerceIn(0, 99), transferred.get(), estimate.bytes)
                     }
                 }
                 delay(200)
@@ -209,6 +287,7 @@ object AdaptiveDownload {
             metadata.totalBytes = 0
             // A running export must not replace the record for a previously saved copy.
             activeFiles[id] = DownloadObjects.DownloadedFileInfoResult(0, 0, temporaryUri)
+            activeProgress[id] = Progress(0, 0)
             metadata.type = DownloadType.IsDownloading
             val interceptor = getApiFromNameNull(apiName)?.getVideoInterceptor(link)
                 ?: getApiFromNameNull(link.source)?.getVideoInterceptor(link)
@@ -218,14 +297,16 @@ object AdaptiveDownload {
             val exported = exportToFile(context, link, output, interceptor,
                 keepRunning = { metadata.type != DownloadType.IsStopped },
                 isPaused = { metadata.type == DownloadType.IsPaused },
-                progress = { value, bytes ->
+                progress = { value, bytes, estimate ->
                     metadata.bytesDownloaded = bytes
                     metadata.bytesWritten = output.length()
                     metadata.hlsProgress = if (value > 0) (value * 98 / 100).coerceAtLeast(1) else 0
                     metadata.hlsTotal = if (metadata.hlsProgress > 0) 100 else null
                     metadata.hlsWrittenProgress = metadata.hlsProgress
-                    // Zero means an unknown total; never estimate a file size by dividing by 0%.
-                    metadata.totalBytes = if (metadata.hlsProgress == 0) 0L else null
+                    // The estimate stays fixed; a timestamp percentage is not a byte-size measurement.
+                    metadata.totalBytes = estimate
+                    val percentage = maxOf(activeProgress[id]?.percentage ?: 0, metadata.hlsProgress)
+                    activeProgress[id] = Progress(percentage, estimate)
                     activeFiles[id] = DownloadObjects.DownloadedFileInfoResult(bytes, metadata.approxTotalBytes, temporaryUri)
                     metadata.type = metadata.type
                 }, container = { extension = it })
@@ -236,6 +317,7 @@ object AdaptiveDownload {
             metadata.totalBytes = length
             metadata.hlsTotal = 100
             metadata.hlsProgress = 99
+            activeProgress[id] = Progress(99, length)
             // A unique destination keeps any existing completed download intact until this one succeeds.
             val uniqueName = "$name [$id-${System.currentTimeMillis()}]"
             val stream = withContext(Dispatchers.IO) {
@@ -267,6 +349,7 @@ object AdaptiveDownload {
             metadata.hlsWrittenProgress = 100
             metadata.setDownloadFileInfoTemplate(DownloadedFileInfo(length, folder, "$uniqueName.$extension", basePath = basePath))
             activeFiles.remove(id)
+            activeProgress.remove(id)
             complete = true
             metadata.type = DownloadType.IsDone
             DownloadStatus(false, false, true)
@@ -276,7 +359,9 @@ object AdaptiveDownload {
         } catch (error: Exception) {
             logError(error)
             metadata.type = DownloadType.IsFailed
-            DownloadStatus(true, true, false)
+            // Starting the entire export again discards the received movie. Transient segment
+            // failures are retried in place by PausableDataSource instead.
+            DownloadStatus(false, false, false)
         } finally {
             withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) {
                 try {
@@ -284,6 +369,7 @@ object AdaptiveDownload {
                     output.delete()
                 } finally {
                     activeFiles.remove(id)
+                    activeProgress.remove(id)
                     metadata.close()
                 }
             }

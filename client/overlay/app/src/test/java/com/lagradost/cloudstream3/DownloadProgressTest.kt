@@ -12,7 +12,12 @@ class DownloadProgressTest {
     }
 
     @Test fun knownTotalsStillShowTheirProgress() {
-        assertEquals(49L, DownloadMetadata(1, 5_000, 10_000, DownloadType.IsDownloading).progressPercentage)
+        assertEquals(50L, DownloadMetadata(1, 5_000, 10_000, DownloadType.IsDownloading).progressPercentage)
         assertEquals(100L, DownloadMetadata(1, 10_000, 9_000, DownloadType.IsDone).progressPercentage)
+    }
+
+    @Test fun completedFilesDoNotRetainAnArtificialRemainder() {
+        assertEquals(100L, DownloadMetadata(1, 19_000_000, 19_000_000, DownloadType.IsDone).progressPercentage)
+        assertEquals(100L, DownloadMetadata(1, 19_000_000, 19_000_000, null).progressPercentage)
     }
 }

@@ -28,8 +28,17 @@ on:
         description: 'Device checks to run'
         required: false
         type: choice
-        options: [all, ui, home]
+        options: [all, ui, home, transfer]
         default: all
+      movie_query:
+        description: 'Exact movie title for an opt-in full Zona transfer'
+        required: false
+        type: string
+      movie_quality:
+        description: 'Selected quality for the opt-in transfer'
+        required: false
+        default: '1080'
+        type: string
 permissions:
   contents: read
   actions: read
@@ -147,12 +156,14 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign --ks "$KADROGRAD_SIGNING_STORE_PATH" --ks-key-alias kadrograd --ks-pass env:KADROGRAD_SIGNING_PASSWORD --out "$apk" "$RUNNER_TEMP/client-aligned.apk"
           python3 client/verify_apk.py "$apk"
       - name: Verify adaptive downloads on Android
-        timeout-minutes: 12
+        timeout-minutes: 25
         env:
           KADROGRAD_UPGRADE_FROM: https://github.com/davdan229/kadrograd/releases/download/client-v1.0.0-beta.1/CloudStream-Kadrograd-1.0.0-beta.1.apk
           KADROGRAD_UPGRADE_SHA256: da84158d04f396afb3c6765137fdf0ee7a4c81f1b542d4f30cf393e9765a3a09
           KADROGRAD_ANDROID_API: ${{ inputs.android_api || '35' }}
           KADROGRAD_CHECK_SUITE: ${{ inputs.check_suite || 'all' }}
+          KADROGRAD_MOVIE_QUERY: ${{ inputs.movie_query }}
+          KADROGRAD_MOVIE_QUALITY: ${{ inputs.movie_quality }}
         run: bash client/run_android_checks.sh .client-work/upstream
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()

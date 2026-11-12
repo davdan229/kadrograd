@@ -1,6 +1,8 @@
 package ru.kadrograd
 
 import com.lagradost.cloudstream3.MovieLoadResponse
+import com.lagradost.cloudstream3.AnimeLoadResponse
+import com.lagradost.cloudstream3.TvSeriesLoadResponse
 import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import kotlinx.coroutines.runBlocking
@@ -10,6 +12,33 @@ import org.junit.Test
 
 /** Explicit diagnostic: print available resolutions without publishing signed media URLs. */
 class SourceInspectionCheck {
+    @Test fun inspectRequestedAnime() = runBlocking<Unit> {
+        val query = System.getenv("KADROGRAD_INSPECT_ANIME").orEmpty()
+        assumeTrue("Set KADROGRAD_INSPECT_ANIME for anime source inspection", query.isNotBlank())
+        for (api in listOf(LibriaProvider("https://anilibria.top"), VostProvider("https://v14.vost.pw"), ZonaProvider("https://w1.zona.im"))) {
+            try {
+                val cards = api.search(query).orEmpty().take(5)
+                println("Anime source=${api.name} cards=${cards.map { it.name }}")
+                for (card in cards) {
+                    val title = api.load(card.url) ?: continue
+                    val episodes = when (title) {
+                        is AnimeLoadResponse -> title.episodes.values.flatten()
+                        is TvSeriesLoadResponse -> title.episodes
+                        else -> emptyList()
+                    }
+                    val episode = episodes.firstOrNull() ?: continue
+                    val links = mutableListOf<ExtractorLink>()
+                    api.loadLinks(episode.data, false, {}, links::add)
+                    println("Anime source=${api.name} title=${title.name} season=${episode.season} episode=${episode.episode}: ${links.map { it.quality to it.name }.distinct()}")
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                println("Anime source=${api.name} unavailable=${failure.javaClass.simpleName}")
+            }
+        }
+    }
+
     @Test fun inspectRequestedNativePlayers() = runBlocking<Unit> {
         val keys = System.getenv("KADROGRAD_INSPECT_NATIVE_KEYS").orEmpty().split(',')
             .map(String::trim).filter { it.matches(Regex("\\d+")) }.distinct().take(10)

@@ -157,6 +157,33 @@ class AdaptiveDownloadTest {
                         delay(100)
                     }
                 }
+                offline.onActivity {
+                    val player = checkNotNull(it.findViewById<PlayerView>(R.id.player_view)?.player)
+                    assertTrue("The saved movie has no duration", player.duration > 0)
+                    assertTrue("The saved movie is not seekable", player.isCurrentMediaItemSeekable)
+                    player.pause()
+                }
+                for (fraction in listOf(0.6, 0.1, 0.85)) {
+                    var target = 0L
+                    offline.onActivity {
+                        val player = checkNotNull(it.findViewById<PlayerView>(R.id.player_view)?.player)
+                        target = (player.duration * fraction).toLong()
+                        player.seekTo(target)
+                        player.play()
+                    }
+                    withTimeout(10_000) {
+                        while (true) {
+                            var reached = false
+                            offline.onActivity {
+                                val player = checkNotNull(it.findViewById<PlayerView>(R.id.player_view)?.player)
+                                player.playerError?.let { error -> throw AssertionError("Offline seeking failed", error) }
+                                reached = player.currentPosition >= target && player.playbackState == androidx.media3.common.Player.STATE_READY
+                            }
+                            if (reached) break
+                            delay(50)
+                        }
+                    }
+                }
                 assertNull(connectivity.activeNetwork)
             }
         } finally {
@@ -167,8 +194,11 @@ class AdaptiveDownloadTest {
     }
 
     /** Local HTTP verifies that every manifest/segment uses the provider's request interceptor. */
-    private inner class FixtureServer(private val beforeBody: (String) -> Unit = {}) : AutoCloseable {
+    private inner class FixtureServer(private val breakFirstChunk: Boolean = false,
+        private val beforeBody: (String) -> Unit = {}) : AutoCloseable {
         val requests = ConcurrentLinkedQueue<String>()
+        val ranges = ConcurrentLinkedQueue<Pair<String, Long>>()
+        private val broken = AtomicBoolean(false)
         private val server = ServerSocket(0)
         private val executor = Executors.newFixedThreadPool(4)
         val origin = "http://127.0.0.1:${server.localPort}"
@@ -188,13 +218,24 @@ class AdaptiveDownloadTest {
                         val bytes = if (headers["x-fixture-auth"] == "selected") {
                             runCatching { instrumentation.context.assets.open("adaptive$path").use { input -> input.readBytes() } }.getOrNull()
                         } else null
-                        val status = if (bytes == null) "403 Forbidden" else "200 OK"
-                        val body = bytes ?: byteArrayOf()
+                        val range = headers["range"]?.let { Regex("bytes=(\\d+)-(\\d*)").matchEntire(it) }
+                        val start = range?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                        val end = minOf(range?.groupValues?.get(2)?.toIntOrNull() ?: Int.MAX_VALUE, (bytes?.size ?: 0) - 1)
+                        ranges.add(path to start.toLong())
+                        val status = when { bytes == null -> "403 Forbidden"; start > end -> "416 Range Not Satisfiable"; range != null -> "206 Partial Content"; else -> "200 OK" }
+                        val body = if (bytes != null && start <= end) bytes.copyOfRange(start, end + 1) else byteArrayOf()
+                        val contentRange = if (range != null && body.isNotEmpty()) "Content-Range: bytes $start-$end/${bytes!!.size}\r\n" else ""
                         val type = when { path.endsWith(".mpd") -> "application/dash+xml"; path.endsWith(".m3u8") -> "application/vnd.apple.mpegurl"; else -> "application/octet-stream" }
                         it.getOutputStream().apply {
-                            write("HTTP/1.1 $status\r\nContent-Type: $type\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n".toByteArray())
+                            write("HTTP/1.1 $status\r\nContent-Type: $type\r\n$contentRange".toByteArray())
+                            write("Content-Length: ${body.size}\r\nConnection: close\r\n\r\n".toByteArray())
                             flush()
                             beforeBody(path)
+                            if (breakFirstChunk && start == 0 && body.size > 1 && path.contains("/chunk-0-") && broken.compareAndSet(false, true)) {
+                                write(body, 0, body.size / 2)
+                                flush()
+                                return@use
+                            }
                             write(body)
                             flush()
                         }
@@ -432,6 +473,41 @@ class AdaptiveDownloadTest {
             assertTrue(server.requests.any { it.contains("init-4.webm") })
             assertFalse(server.requests.any { it.contains("init-3.webm") || it.contains("chunk-3-") })
         }
+    }
+
+    @Test fun interruptedMediaReadContinuesFromItsReceivedOffset() = runBlocking {
+        FixtureServer(breakFirstChunk = true).use { server ->
+            val output = File.createTempFile("adaptive-range-retry-", ".webm", context.cacheDir)
+            try {
+                val link = newExtractorLink("Fixture", "Studio B", "${server.origin}/dash/manifest.mpd", ExtractorLinkType.DASH) { quality = 2160 }
+                assertTrue(withTimeout(60_000) { AdaptiveDownload.exportToFile(context, link, output, selection(2160, 4)) })
+                assertTracks(output, 3840, 2160)
+                assertTrue("The broken chunk did not resume with a byte range", server.ranges.any { it.first.contains("/chunk-0-") && it.second > 0 })
+                assertEquals(1, server.requests.count { it.endsWith("manifest.mpd") })
+                assertEquals(1, server.requests.count { it.contains("init-0.webm") })
+            } finally { output.delete() }
+        }
+    }
+
+    @Test fun aSecondExportDoesNotRestartOrCancelTheFirst() = runBlocking {
+        FixtureServer().use { first -> FixtureServer().use { second ->
+            val firstFile = File.createTempFile("adaptive-parallel-a-", ".webm", context.cacheDir)
+            val secondFile = File.createTempFile("adaptive-parallel-b-", ".webm", context.cacheDir)
+            try {
+                coroutineScope {
+                    val jobs = listOf(Triple(first, firstFile, 1080), Triple(second, secondFile, 720)).map { (server, file, height) ->
+                        async {
+                            val link = newExtractorLink("Fixture", "Studio B", "${server.origin}/dash/manifest.mpd", ExtractorLinkType.DASH) { quality = height }
+                            withTimeout(60_000) { AdaptiveDownload.exportToFile(context, link, file, selection(height, 4)) }
+                        }
+                    }
+                    jobs.forEach { assertTrue(it.await()) }
+                }
+                assertTracks(firstFile, 1920, 1080)
+                assertTracks(secondFile, 1280, 720)
+                for (server in listOf(first, second)) assertEquals(1, server.requests.count { it.endsWith("manifest.mpd") })
+            } finally { firstFile.delete(); secondFile.delete() }
+        } }
     }
 
     @Test fun hlsWithSeparateAudioSavesTheSelectedVoice() = runBlocking {

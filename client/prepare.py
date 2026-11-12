@@ -86,13 +86,16 @@ dependencies {
 
     path = BASE + "utils/downloader/DownloadManager.kt"
     text = replace_once(changes[path], " || link.type == ExtractorLinkType.DASH", " /* DASH is handled by AdaptiveDownload below. */")
+    text = replace_once(text, "            if (total <= 0) return null// crash, invalid data", "            // Adaptive exports can start before a size estimate is available.")
     text = replace_once(text, """                builder.setProgress((total / 1000).toInt(), (progress / 1000).toInt(), false)""", """                if (total > 0) {
                     builder.setProgress((total / 1000).coerceAtLeast(1).toInt(), (progress / 1000).toInt(), false)
                 } else builder.setProgress(0, 0, true)""")
     text = replace_once(text, "                    progressPercentage = progress * 100 / total", "                    progressPercentage = if (total > 0) progress * 100 / total else 0")
     text = replace_once(text, """                            (if (linkName == null) "" else "$linkName\\n") + "$rowTwo\\n$progressPercentage % ($progressMbString/$totalMbString)$suffix$mbPerSecondString $remainingTime" """.rstrip(),
         """                            (if (linkName == null) "" else "$linkName\\n") +
-                                if (total <= 0 && hlsTotal == null) {
+                                if (AdaptiveDownload.progressText(context, ep.id, progress) != null) {
+                                    "$rowTwo\\n" + AdaptiveDownload.progressText(context, ep.id, progress) + mbPerSecondString
+                                } else if (total <= 0 && hlsTotal == null) {
                                     "$rowTwo\\n" + android.text.format.Formatter.formatShortFileSize(context, progress) + mbPerSecondString
                                 } else "$rowTwo\\n$progressPercentage % ($progressMbString/$totalMbString)$suffix$mbPerSecondString $remainingTime" """.rstrip())
     text = replace_once(text, """    fun getDownloadFileInfo(
@@ -152,10 +155,28 @@ dependencies {
     changes[path] = replace_once(text, "            if (bytes <= 0 || downloads <= 0) {", "            if (downloads <= 0) {")
 
     path = BASE + "ui/download/button/BaseFetchButton.kt"
-    text = replace_once(changes[path], "if (downloadedLength < 1024) 0 else maxOf(", "if (downloadedLength < 1024 || totalLength <= 0) 0 else maxOf(")
+    text = replace_once(changes[path], """        get() = if (downloadedLength < 1024) 0 else maxOf(
+            0,
+            minOf(100, (downloadedLength * 100L) / (totalLength + 1))
+        )""", """        get() {
+            if (status == DownloadStatusTell.IsDone) return 100L
+            com.lagradost.cloudstream3.utils.downloader.AdaptiveDownload.progressPercentage(id)?.let { return it.toLong() }
+            return if (downloadedLength < 1024 || totalLength <= 0) 0L
+                else (100.0 * downloadedLength / totalLength).toLong().coerceIn(0L, 100L)
+        }""")
+    text = replace_once(text, "(downloadedBytes * steps / (totalBytes + 1L)).toInt()", "if (totalBytes > 0) (downloadedBytes.toDouble() * steps / totalBytes).toInt().coerceIn(0, steps.toInt()) else 0")
     text = replace_once(text, "downloadedBytes > 1024L && downloadedBytes + 1024L >= totalBytes", "totalBytes > 0 && downloadedBytes > 1024L && downloadedBytes + 1024L >= totalBytes")
     text = replace_once(text, """        progressBar.post {
             val steps = 10000L""", """        progressBar.post {
+            val adaptive = com.lagradost.cloudstream3.utils.downloader.AdaptiveDownload.progressPercentage(persistentId)
+            if (adaptive != null) {
+                progressBar.clearAnimation()
+                progressBar.isIndeterminate = false
+                progressBar.max = 100
+                progressBar.progress = adaptive
+                if (doSetProgress) progressText?.text = com.lagradost.cloudstream3.utils.downloader.AdaptiveDownload.progressText(context, persistentId, downloadedBytes)
+                return@post
+            }
             val unknownTotal = totalBytes <= 0 && downloadedBytes > 0
             progressBar.isIndeterminate = unknownTotal
             if (unknownTotal) {
@@ -190,7 +211,7 @@ dependencies {
                 DownloadStatusTell.IsDownloading, DownloadStatusTell.IsPaused
             )
             if (view.isVisible) {
-                view.text = if (totalBytes > 0) {
+                view.text = com.lagradost.cloudstream3.utils.downloader.AdaptiveDownload.progressText(context, persistentId, downloadedBytes) ?: if (totalBytes > 0) {
                     "${(100.0 * downloadedBytes / totalBytes).toInt().coerceIn(0, 99)}%"
                 } else android.text.format.Formatter.formatShortFileSize(context, downloadedBytes)
             }

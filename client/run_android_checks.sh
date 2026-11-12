@@ -5,7 +5,7 @@ results="$checkout/android-checks"
 android_api="${KADROGRAD_ANDROID_API:-35}"
 case "$android_api" in 30|33|35|36) ;; *) echo 'Unsupported Android API'; exit 1 ;; esac
 check_suite="${KADROGRAD_CHECK_SUITE:-all}"
-case "$check_suite" in all|ui|home) ;; *) echo 'Unsupported check suite'; exit 1 ;; esac
+case "$check_suite" in all|ui|home|transfer) ;; *) echo 'Unsupported check suite'; exit 1 ;; esac
 mkdir -p "$results"
 logcat_pid=''
 cleanup() {
@@ -78,10 +78,16 @@ if [ -n "${KADROGRAD_UPGRADE_FROM:-}" ]; then
   adb shell am instrument -w -r -e class 'com.lagradost.cloudstream3.UpgradeStateTest#assertAfterUpgrade' ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/upgrade-after.txt" || status=1
   grep -q 'OK (1 test)' "$results/upgrade-after.txt" || status=1
 fi
+if [ "$check_suite" = transfer ]; then
+  test -n "$KADROGRAD_MOVIE_QUERY"
+  timeout 1020 adb shell am instrument -w -r -e movieQuery "'$KADROGRAD_MOVIE_QUERY'" -e movieQuality "${KADROGRAD_MOVIE_QUALITY:-1080}" -e class com.lagradost.cloudstream3.LiveDownloadTest ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/live-transfer.txt" || status=1
+  grep -q 'OK (1 test)' "$results/live-transfer.txt" || status=1
+  exit "$status"
+fi
 if [ "$check_suite" != all ]; then
   if [ "$check_suite" = ui ]; then
     classes='com.lagradost.cloudstream3.AdaptiveDownloadTest,com.lagradost.cloudstream3.KadrogradHomeTest#sourcePickerListsAllBundledSourcesAndKeepsLaterFilterChanges'
-    expected='OK (9 tests)'
+    expected='OK (11 tests)'
   else
     classes='com.lagradost.cloudstream3.KadrogradHomeTest#allBundledSourcesHaveAVisibleHeroAndPlayButton'
     expected='OK (1 test)'
@@ -106,7 +112,7 @@ if [ "$check_suite" != all ]; then
   exit "$status"
 fi
 timeout 300 adb shell am instrument -w -r -e keepOfflineFixture true -e class com.lagradost.cloudstream3.AdaptiveDownloadTest ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/instrumentation.txt" || status=1
-grep -q 'OK (8 tests)' "$results/instrumentation.txt" || status=1
+grep -q 'OK (10 tests)' "$results/instrumentation.txt" || status=1
 if grep -q 'FAILURES!!!' "$results/instrumentation.txt"; then status=1; fi
 if [ "$status" = 0 ]; then verify_offline_restart; fi
 if [ "$status" = 0 ]; then verify_crash_recovery; fi
