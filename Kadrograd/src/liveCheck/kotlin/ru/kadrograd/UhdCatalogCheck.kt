@@ -47,9 +47,10 @@ class UhdCatalogCheck {
                 println("UHD catalog: kp=$kpId status=${if (best == null) "no_uhd" else "verified"}")
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Exception) {
+            } catch (failure: Exception) {
                 unavailable++
-                println("UHD catalog: kp=$kpId status=unavailable")
+                val reason = failure.message?.replace(Regex("https?://[^\\s]+"), "<url>")?.take(180)
+                println("UHD catalog: kp=$kpId status=unavailable type=${failure.javaClass.simpleName} reason=$reason")
             }
         }
 
