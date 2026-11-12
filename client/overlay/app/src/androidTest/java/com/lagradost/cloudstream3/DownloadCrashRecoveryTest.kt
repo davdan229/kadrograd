@@ -25,6 +25,8 @@ class DownloadCrashRecoveryTest {
         val item = DownloadObjects.DownloadItem(null, "Movies", metadata, emptyList())
         val wrapper = DownloadObjects.DownloadResumePackage(item, 0).toWrapper()
         CloudStreamApp.setKey(DownloadQueueManager.QUEUE_KEY, arrayOf(wrapper))
+        check(context.getSharedPreferences("rebuild_preference", 0).edit()
+            .putInt("native_crash_check_pid", Process.myPid()).commit())
         check(context.getSharedPreferences("download_crash_check", 0).edit()
             .putInt("pid", Process.myPid()).commit())
         println("Queue persisted before intentional SIGABRT")

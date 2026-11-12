@@ -9,6 +9,14 @@ import org.junit.Test
 import kotlin.io.encoding.Base64
 
 class ZonaHlsTest {
+    @Test fun singlePublishedVoiceAlsoLabelsNonNumericHlsAudioNames() {
+        val text = "#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio\",NAME=\"stereo\",URI=\"audio.m3u8\"\n"
+        val parsed = ZonaHls.parse(text, "https://cdn.example/master.m3u8")
+        assertEquals(listOf("Рус. Оригинальный"), ZonaHls.labels(parsed, listOf("Рус. Оригинальный")).values.toList())
+        assertTrue(ZonaHls.labels(parsed, listOf("Студия А", "Студия Б")).isEmpty())
+        assertTrue(ZonaHls.labels(parsed, listOf("delete")).isEmpty())
+    }
+
     private val base = "https://video.cdn.example/film/master.m3u8"
     private val names = listOf("Студия, Дубляж","Японский оригинал")
     private fun context(media: String = base) = ZonaTracks.Context(kind="zona-hls-v1",media=media,

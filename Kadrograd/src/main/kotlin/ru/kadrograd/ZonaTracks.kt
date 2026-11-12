@@ -40,7 +40,9 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
         val isFourK get() = width >= 3840 && height >= 1440
         val playbackQuality get() = when {
             isFourK -> 2160
+            width in 2560..2732 && height in 1067..<1440 -> 1440
             width in 1920..2048 && height in 800..<1080 -> 1080
+            width in 1280..1366 && height in 534..<720 -> 720
             else -> height
         }
     }
@@ -100,7 +102,7 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
             val request = chain.request()
             val original = request.url.toString()
             val rewritten = context.transform(original)
-            val response = chain.proceed(request.newBuilder().url(rewritten).apply { if (rewritten != original) header("User-Agent",context.agent) }.build())
+            val response = SourceHttp.proceed(chain, request.newBuilder().url(rewritten).apply { if (rewritten != original) header("User-Agent",context.agent) }.build())
             val path = URI(original).path
             val master = context.kind == "zona-hls-v1" && path == URI(context.media).path &&
                 request.url.host == URI(context.media).host && URI(original).rawQuery == URI(context.media).rawQuery
@@ -244,7 +246,7 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
             }
                 .forEach { (format,url) -> launch {
                     try {
-                        onFound(if (format == "hls") ZonaHls.load(url,base,names,subs)
+                        onFound(if (format == "hls") ZonaHls.load(url,base,names,subs,onFailure)
                             else dash(url,base.copy(media=url),names,subs,minimumWidth).copy(av1 = format == "dasha"))
                     } catch (cancelled: CancellationException) { throw cancelled }
                       catch (failure: Exception) { onFailure(failure) }
@@ -266,7 +268,7 @@ internal class ZonaTracks(private val origins: () -> List<String>, private val u
         }
         // Verify initialization, early and middle media for every video resolution and every audio track.
         withContext(Dispatchers.IO) {
-            val client = com.lagradost.cloudstream3.app.baseClient.newBuilder().callTimeout(4,java.util.concurrent.TimeUnit.SECONDS).build()
+            val client = SourceHttp.client().newBuilder().callTimeout(4,java.util.concurrent.TimeUnit.SECONDS).build()
             val nodes = document.getElementsByTag("Representation")
             val jobs = nodes.map { representation ->
                 val template = representation.getElementsByTag("SegmentTemplate").firstOrNull()
