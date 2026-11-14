@@ -171,14 +171,34 @@ class AdaptiveDownloadTest {
                     player.pause()
                     view.showController()
                 }
+                val timeBarId = androidx.media3.ui.R.id.exo_progress
+                val timeBar = allOf(withId(timeBarId), isDisplayed())
                 for (fraction in listOf(0.6, 0.1, 0.85)) {
                     var duration = 0L
+                    var controlsVisible = false
                     offline.onActivity {
                         val view = checkNotNull(it.findViewById<PlayerView>(R.id.player_view))
                         duration = checkNotNull(view.player).duration
-                        view.showController()
+                        controlsVisible = view.findViewById<View>(timeBarId)?.isShown == true
                     }
-                    val timeBar = allOf(withId(androidx.media3.ui.R.id.exo_progress), isDisplayed())
+                    if (!controlsVisible) {
+                        // CloudStream shows its own controls when the video surface is tapped.
+                        onView(withId(R.id.player_holder)).perform(GeneralClickAction(Tap.SINGLE, { view ->
+                            val location = IntArray(2)
+                            view.getLocationOnScreen(location)
+                            floatArrayOf(location[0] + view.width * 0.5f, location[1] + view.height * 0.3f)
+                        }, Press.FINGER))
+                        withTimeout(5_000) {
+                            while (!controlsVisible) {
+                                offline.onActivity {
+                                    controlsVisible = it.findViewById<View>(timeBarId)?.let { bar ->
+                                        bar.isShown && bar.getGlobalVisibleRect(android.graphics.Rect())
+                                    } == true
+                                }
+                                if (!controlsVisible) delay(100)
+                            }
+                        }
+                    }
                     onView(timeBar).perform(GeneralClickAction(Tap.SINGLE, { view ->
                         check(view.isEnabled) { "Offline seek bar is disabled" }
                         val position = IntArray(2)
