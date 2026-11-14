@@ -223,6 +223,9 @@ class AdaptiveDownloadTest {
                 assertNull(connectivity.activeNetwork)
             }
         } finally {
+            // Closing a fullscreen activity can leave the emulator in landscape
+            // until the next activity enters. Give the download picker a portrait display.
+            shell("wm user-rotation lock 0")
             shell("cmd connectivity airplane-mode disable")
             shell("svc wifi enable")
             shell("svc data enable")
