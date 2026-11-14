@@ -16,6 +16,8 @@ import androidx.test.espresso.NoMatchingViewException
 import androidx.test.espresso.UiController
 import androidx.test.espresso.ViewAction
 import androidx.test.espresso.action.GeneralSwipeAction
+import androidx.test.espresso.action.GeneralClickAction
+import androidx.test.espresso.action.Tap
 import androidx.test.espresso.action.Press
 import androidx.test.espresso.action.Swipe
 import androidx.test.espresso.action.ViewActions.click
@@ -30,6 +32,9 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.AppContextUtils.loadResult
+import com.lagradost.cloudstream3.utils.DOWNLOAD_EPISODE_CACHE
+import com.lagradost.cloudstream3.utils.DOWNLOAD_HEADER_CACHE
+import com.lagradost.cloudstream3.utils.DataStore.getFolderName
 import com.lagradost.cloudstream3.plugins.PluginManager
 import com.lagradost.cloudstream3.services.DownloadQueueService
 import com.lagradost.cloudstream3.utils.downloader.AdaptiveDownload
@@ -120,7 +125,7 @@ class AdaptiveDownloadTest {
         }
     }
 
-    internal suspend fun playFromDownloadsOffline(expectedWidth: Int, expectedHeight: Int) {
+    internal suspend fun playFromDownloadsOffline(expectedWidth: Int, expectedHeight: Int, titleText: String = "Download fixture") {
         val connectivity = context.getSystemService(ConnectivityManager::class.java)
         try {
             shell("cmd connectivity airplane-mode enable")
@@ -136,14 +141,15 @@ class AdaptiveDownloadTest {
                     while (true) {
                         var listed = false
                         offline.onActivity {
-                            val title = it.findViewById<TextView>(R.id.download_header_title)
-                            listed = title?.isShown == true && title.text.toString() == "Download fixture"
+                            val titles = arrayListOf<View>()
+                            it.window.decorView.findViewsWithText(titles, titleText, View.FIND_VIEWS_WITH_TEXT)
+                            listed = titles.any { title -> title.id == R.id.download_header_title && title.isShown }
                         }
                         if (listed) break
                         delay(100)
                     }
                 }
-                onView(allOf(withId(R.id.download_header_title), withText("Download fixture"))).perform(click())
+                onView(allOf(withId(R.id.download_header_title), withText(titleText))).perform(click())
                 withTimeout(20_000) {
                     while (true) {
                         var playing = false
@@ -158,26 +164,36 @@ class AdaptiveDownloadTest {
                     }
                 }
                 offline.onActivity {
-                    val player = checkNotNull(it.findViewById<PlayerView>(R.id.player_view)?.player)
+                    val view = checkNotNull(it.findViewById<PlayerView>(R.id.player_view))
+                    val player = checkNotNull(view.player)
                     assertTrue("The saved movie has no duration", player.duration > 0)
                     assertTrue("The saved movie is not seekable", player.isCurrentMediaItemSeekable)
                     player.pause()
+                    view.showController()
                 }
                 for (fraction in listOf(0.6, 0.1, 0.85)) {
-                    var target = 0L
+                    var duration = 0L
                     offline.onActivity {
-                        val player = checkNotNull(it.findViewById<PlayerView>(R.id.player_view)?.player)
-                        target = (player.duration * fraction).toLong()
-                        player.seekTo(target)
-                        player.play()
+                        val view = checkNotNull(it.findViewById<PlayerView>(R.id.player_view))
+                        duration = checkNotNull(view.player).duration
+                        view.showController()
                     }
+                    val timeBar = allOf(withId(androidx.media3.ui.R.id.exo_progress), isDisplayed())
+                    onView(timeBar).perform(GeneralClickAction(Tap.SINGLE, { view ->
+                        check(view.isEnabled) { "Offline seek bar is disabled" }
+                        val position = IntArray(2)
+                        view.getLocationOnScreen(position)
+                        floatArrayOf(position[0] + view.width * fraction.toFloat(), position[1] + view.height / 2f)
+                    }, Press.FINGER))
+                    val target = (duration * fraction).toLong()
                     withTimeout(10_000) {
                         while (true) {
                             var reached = false
                             offline.onActivity {
                                 val player = checkNotNull(it.findViewById<PlayerView>(R.id.player_view)?.player)
                                 player.playerError?.let { error -> throw AssertionError("Offline seeking failed", error) }
-                                reached = player.currentPosition >= target && player.playbackState == androidx.media3.common.Player.STATE_READY
+                                reached = kotlin.math.abs(player.currentPosition - target) < duration / 6 &&
+                                    player.playbackState == androidx.media3.common.Player.STATE_READY
                             }
                             if (reached) break
                             delay(50)
@@ -190,6 +206,42 @@ class AdaptiveDownloadTest {
             shell("cmd connectivity airplane-mode disable")
             shell("svc wifi enable")
             shell("svc data enable")
+        }
+    }
+
+    @Test fun existingHlsDownloadCanBeScrubbedWithoutChangingTheFile() = runBlocking<Unit> {
+        val directory = File(context.getExternalFilesDir(null), "legacy-hls-fixture").apply { mkdirs() }
+        val file = File(directory, "Legacy fixture.mp4")
+        instrumentation.context.assets.open("adaptive/legacy-hls.mp4").use { input ->
+            file.outputStream().use { input.copyTo(it) }
+        }
+        val preferences = PreferenceManager.getDefaultSharedPreferences(context)
+        preferences.edit().putInt("app_layout_key", 0).commit()
+        context.getSharedPreferences("rebuild_preference", 0).edit().putString("HAS_DONE_SETUP", "true").commit()
+        val id = -908234
+        val title = "Legacy fixture"
+        val key = id.toString()
+        val seasonFolder = getFolderName(DOWNLOAD_EPISODE_CACHE, key)
+        val length = file.length()
+        val modified = file.lastModified()
+        try {
+            CloudStreamApp.setKey(DOWNLOAD_HEADER_CACHE, key,
+                DownloadObjects.DownloadHeaderCached("Fixture", "https://example.test/legacy", TvType.Movie, title, null,
+                    System.currentTimeMillis(), id))
+            CloudStreamApp.setKey(seasonFolder, key,
+                DownloadObjects.DownloadEpisodeCached(title, null, 0, null, id, description = null,
+                    cacheTime = System.currentTimeMillis(), id = id))
+            CloudStreamApp.setKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, key,
+                DownloadObjects.DownloadedFileInfo(length, "", file.name, extraInfo = "12", basePath = directory.absolutePath))
+            playFromDownloadsOffline(640, 360, title)
+            assertEquals(length, file.length())
+            assertEquals(modified, file.lastModified())
+        } finally {
+            CloudStreamApp.removeKey(DOWNLOAD_HEADER_CACHE, key)
+            CloudStreamApp.removeKey(seasonFolder, key)
+            CloudStreamApp.removeKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, key)
+            file.delete()
+            directory.delete()
         }
     }
 

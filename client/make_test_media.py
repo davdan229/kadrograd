@@ -37,6 +37,15 @@ def generate(root):
 #EXT-X-STREAM-INF:BANDWIDTH=500000,RESOLUTION=1920x1080,CODECS="avc1.42c028,mp4a.40.2",AUDIO="audio"
 video.m3u8
 ''', encoding="utf-8")
+    # Older HLS downloads are transport streams even when the filename ends in .mp4.
+    # Leave a valid run of TS padding packets beyond the player's default PCR search window.
+    legacy = root / "legacy-hls.mp4"
+    ffmpeg(["-f", "lavfi", "-i", "testsrc2=s=640x360:r=12:d=12",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=12",
+            "-c:v", "libx264", "-preset", "ultrafast", "-g", "12",
+            "-c:a", "aac", "-f", "mpegts", legacy.name], root)
+    with legacy.open("ab") as output:
+        output.write((bytes((0x47, 0x1F, 0xFF, 0x10)) + bytes(184)) * 2_000)
     print("Generated", sum(p.stat().st_size for p in root.rglob("*") if p.is_file()), "bytes of synthetic test media")
 
 

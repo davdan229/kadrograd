@@ -28,7 +28,7 @@ on:
         description: 'Device checks to run'
         required: false
         type: choice
-        options: [all, ui, home, transfer]
+        options: [all, ui, home, transfer, seek]
         default: all
       movie_query:
         description: 'Exact movie title for an opt-in full Zona transfer'

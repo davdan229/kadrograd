@@ -5,7 +5,7 @@ results="$checkout/android-checks"
 android_api="${KADROGRAD_ANDROID_API:-35}"
 case "$android_api" in 30|33|35|36) ;; *) echo 'Unsupported Android API'; exit 1 ;; esac
 check_suite="${KADROGRAD_CHECK_SUITE:-all}"
-case "$check_suite" in all|ui|home|transfer) ;; *) echo 'Unsupported check suite'; exit 1 ;; esac
+case "$check_suite" in all|ui|home|transfer|seek) ;; *) echo 'Unsupported check suite'; exit 1 ;; esac
 mkdir -p "$results"
 logcat_pid=''
 cleanup() {
@@ -94,10 +94,15 @@ if [ "$check_suite" = transfer ]; then
   verify_live_transfer
   exit "$status"
 fi
+if [ "$check_suite" = seek ]; then
+  timeout 120 adb shell am instrument -w -r -e class 'com.lagradost.cloudstream3.AdaptiveDownloadTest#existingHlsDownloadCanBeScrubbedWithoutChangingTheFile,com.lagradost.cloudstream3.AdaptiveDownloadTest#movieButtonOffersQualityAndVoiceAndSurvivesActivityRecreationDuringDownload' ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/offline-seeking.txt" || status=1
+  grep -q 'OK (2 tests)' "$results/offline-seeking.txt" || status=1
+  exit "$status"
+fi
 if [ "$check_suite" != all ]; then
   if [ "$check_suite" = ui ]; then
     classes='com.lagradost.cloudstream3.AdaptiveDownloadTest,com.lagradost.cloudstream3.KadrogradHomeTest#sourcePickerListsAllBundledSourcesAndKeepsLaterFilterChanges'
-    expected='OK (13 tests)'
+    expected='OK (14 tests)'
   else
     classes='com.lagradost.cloudstream3.KadrogradHomeTest#allBundledSourcesHaveAVisibleHeroAndPlayButton'
     expected='OK (1 test)'
@@ -123,7 +128,7 @@ if [ "$check_suite" != all ]; then
   exit "$status"
 fi
 timeout 300 adb shell am instrument -w -r -e keepOfflineFixture true -e class com.lagradost.cloudstream3.AdaptiveDownloadTest ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/instrumentation.txt" || status=1
-grep -q 'OK (12 tests)' "$results/instrumentation.txt" || status=1
+grep -q 'OK (13 tests)' "$results/instrumentation.txt" || status=1
 if grep -q 'FAILURES!!!' "$results/instrumentation.txt"; then status=1; fi
 if [ "$status" = 0 ]; then verify_offline_restart; fi
 if [ "$status" = 0 ]; then verify_crash_recovery; fi
