@@ -101,13 +101,13 @@ if [ "$check_suite" = seek ]; then
 fi
 if [ "$check_suite" != all ]; then
   if [ "$check_suite" = ui ]; then
-    classes='com.lagradost.cloudstream3.AdaptiveDownloadTest,com.lagradost.cloudstream3.KadrogradHomeTest#sourcePickerListsAllBundledSourcesAndKeepsLaterFilterChanges'
-    expected='OK (14 tests)'
+    classes='com.lagradost.cloudstream3.AdaptiveDownloadTest,com.lagradost.cloudstream3.SavedMediaTest,com.lagradost.cloudstream3.KadrogradHomeTest#sourcePickerListsAllBundledSourcesAndKeepsLaterFilterChanges'
+    expected='OK (16 tests)'
   else
     classes='com.lagradost.cloudstream3.KadrogradHomeTest#allBundledSourcesHaveAVisibleHeroAndPlayButton'
     expected='OK (1 test)'
   fi
-  timeout 180 adb shell am instrument -w -r -e keepOfflineFixture true -e class "$classes" ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/selected-instrumentation.txt" || status=1
+  timeout 300 adb shell am instrument -w -r -e keepOfflineFixture true -e class "$classes" ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/selected-instrumentation.txt" || status=1
   grep -q "$expected" "$results/selected-instrumentation.txt" || status=1
   if [ "$check_suite" = ui ] && [ "$status" = 0 ]; then verify_offline_restart; fi
   if [ "$check_suite" = ui ] && [ "$status" = 0 ]; then verify_crash_recovery; fi
@@ -127,8 +127,8 @@ if [ "$check_suite" != all ]; then
   fi
   exit "$status"
 fi
-timeout 300 adb shell am instrument -w -r -e keepOfflineFixture true -e class com.lagradost.cloudstream3.AdaptiveDownloadTest ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/instrumentation.txt" || status=1
-grep -q 'OK (13 tests)' "$results/instrumentation.txt" || status=1
+timeout 300 adb shell am instrument -w -r -e keepOfflineFixture true -e class 'com.lagradost.cloudstream3.AdaptiveDownloadTest,com.lagradost.cloudstream3.SavedMediaTest' ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/instrumentation.txt" || status=1
+grep -q 'OK (15 tests)' "$results/instrumentation.txt" || status=1
 if grep -q 'FAILURES!!!' "$results/instrumentation.txt"; then status=1; fi
 if [ "$status" = 0 ]; then verify_offline_restart; fi
 if [ "$status" = 0 ]; then verify_crash_recovery; fi

@@ -111,6 +111,13 @@ dependencies {
         Log.i(TAG, "loadExo")""")
     text = replace_once(text, "                onlineSource = onlineSource,\n            )\n\n            event(PlayerAttachedEvent",
         "                onlineSource = onlineSource,\n                downloadedFile = downloadedFile,\n            )\n\n            event(PlayerAttachedEvent")
+    text = replace_once(text, "\n            isPlaying = exo.isPlaying\n", "\n            isPlaying = exo.playWhenReady\n")
+    text = replace_once(text, "\n                isPlaying = exo.isPlaying\n", "\n                isPlaying = exo.playWhenReady\n")
+    text = replace_once(text, """        Log.i(TAG, "reloadPlayer")
+
+        releasePlayer(false)""", """        Log.i(TAG, "reloadPlayer")
+        saveData()
+        releasePlayer(false)""")
     changes[path] = replace_once(text, "            loadExo(context, listOf(MediaItemSlice(mediaItem, Long.MIN_VALUE)), subSources)",
         "            loadExo(context, listOf(MediaItemSlice(mediaItem, Long.MIN_VALUE)), subSources, downloadedFile = true)")
 
@@ -148,7 +155,7 @@ dependencies {
             )""", """            val length = file.lengthOrThrow()
             val uri = file.uriOrThrow()
             val checked = DownloadRecordRepair.reconcile(context, id, info, uri, length)
-            return DownloadedFileInfoResult(length, checked.totalBytes, uri)""")
+            return DownloadedFileInfoResult(length, DownloadRecordRepair.presentationTotal(id, checked, length), uri)""")
     text = replace_once(text, '                        "mp4",\n                        tryResume,',
         '                        if (link.url.toUri().lastPathSegment?.endsWith(".webm", ignoreCase = true) == true) "webm" else "mp4",\n                        tryResume,')
     text = replace_once(text, "            when (link.type) {\n                ExtractorLinkType.M3U8 -> {", """            if (link.type == ExtractorLinkType.DASH ||
@@ -182,9 +189,22 @@ dependencies {
     changes[path] = replace_once(text, "        } catch (_: Throwable) {\n            return DOWNLOAD_FAILED\n        } finally {\n            extractorJob.cancel()",
         "        } catch (cancelled: CancellationException) {\n            throw cancelled\n        } catch (_: Throwable) {\n            return DOWNLOAD_FAILED\n        } finally {\n            extractorJob.cancel()")
 
+    path = BASE + "utils/downloader/DownloadManager.kt"
+    text = replace_once(changes[path], "                        extraInfo = if (isHLS) hlsWrittenProgress.toString() else null",
+        """                        completedBytes = if (internalType == DownloadType.IsDone) bytesWritten else null,
+                        hlsTotalSegments = if (isHLS) hlsTotal else null,
+                        extraInfo = if (isHLS) hlsWrittenProgress.toString() else null""")
+    text = replace_once(text, "            if (isHLS || totalBytes == null) {",
+        "            if (isHLS || totalBytes == null || internalType == DownloadType.IsDone) {")
+    changes[path] = text
+
     path = BASE + "utils/downloader/DownloadObjects.kt"
     text = replace_once(changes[path], '        @JsonProperty("subs") val subs: List<SubtitleData>? = null,',
         '        @JsonProperty("subs") val subs: List<SubtitleData>? = null,\n        @JsonProperty("batchChoice") val batchChoice: BatchChoice? = null,')
+    text = replace_once(text, '        @JsonProperty("linkHash") val linkHash : Int? = null',
+        '''        @JsonProperty("linkHash") val linkHash : Int? = null,
+        @JsonProperty("completedBytes") val completedBytes: Long? = null,
+        @JsonProperty("hlsTotalSegments") val hlsTotalSegments: Int? = null''')
     changes[path] = replace_once(text, "    /** General data about the episode and show to start a download from. */", """    data class BatchChoice(
         @JsonProperty("source") val source: String,
         @JsonProperty("quality") val quality: Int,
@@ -226,6 +246,8 @@ dependencies {
     text = replace_once(changes[path], "            if (childFile.fileLength <= 1) return@forEach", """            if (childFile.fileLength <= 1 &&
                 com.lagradost.cloudstream3.utils.downloader.AdaptiveDownload.activeFileInfo(child.id) == null
             ) return@forEach""")
+    text = replace_once(text, "            val len = childFile.totalBytes",
+        "            val len = childFile.totalBytes.takeIf { it > 0 } ?: childFile.fileLength")
     changes[path] = replace_once(text, "            if (bytes <= 0 || downloads <= 0) {", "            if (downloads <= 0) {")
 
     path = BASE + "ui/download/button/BaseFetchButton.kt"
@@ -238,6 +260,9 @@ dependencies {
             return if (downloadedLength < 1024 || totalLength <= 0) 0L
                 else (100.0 * downloadedLength / totalLength).toLong().coerceIn(0L, 100L)
         }""")
+    text = replace_once(text, "        return VideoDownloadManager.downloadStatus[id]",
+        """        return VideoDownloadManager.downloadStatus[id]
+            ?: com.lagradost.cloudstream3.utils.downloader.DownloadRecordRepair.status(id, downloadedBytes)""")
     text = replace_once(text, "(downloadedBytes * steps / (totalBytes + 1L)).toInt()", "if (totalBytes > 0) (downloadedBytes.toDouble() * steps / totalBytes).toInt().coerceIn(0, steps.toInt()) else 0")
     text = replace_once(text, "downloadedBytes > 1024L && downloadedBytes + 1024L >= totalBytes", "totalBytes > 0 && downloadedBytes > 1024L && downloadedBytes + 1024L >= totalBytes")
     text = replace_once(text, """        progressBar.post {
@@ -252,17 +277,22 @@ dependencies {
                 return@post
             }
             val unknownTotal = totalBytes <= 0 && downloadedBytes > 0
-            progressBar.isIndeterminate = unknownTotal
+            progressBar.isIndeterminate = unknownTotal &&
+                VideoDownloadManager.downloadStatus[persistentId] == DownloadStatusTell.IsDownloading
             if (unknownTotal) {
                 progressBar.clearAnimation()
-                if (doSetProgress) progressText?.text = formatShortFileSize(context, downloadedBytes)
+                if (doSetProgress) progressText?.text =
+                    com.lagradost.cloudstream3.utils.downloader.DownloadRecordRepair.savedProgressText(context, persistentId, downloadedBytes)
+                        ?: formatShortFileSize(context, downloadedBytes)
                 return@post
             }
             val steps = 10000L""")
     changes[path] = text
 
     path = BASE + "ui/download/button/PieFetchButton.kt"
-    changes[path] = replace_once(changes[path], "(metadata.downloadedLength > 1024 && metadata.downloadedLength + 1024 >= metadata.totalLength)", "(metadata.totalLength > 0 && metadata.downloadedLength > 1024 && metadata.downloadedLength + 1024 >= metadata.totalLength)")
+    changes[path] = replace_once(changes[path], "(metadata.downloadedLength > 1024 && metadata.downloadedLength + 1024 >= metadata.totalLength)",
+        """(newStatus == null && metadata.totalLength > 0 &&
+                metadata.downloadedLength > 1024 && metadata.downloadedLength + 1024 >= metadata.totalLength)""")
 
     path = BASE + "ui/download/button/DownloadButton.kt"
     text = replace_once(changes[path], "            textView,\n            card,", "            textView ?: findViewById(R.id.result_movie_download_text_precentage),\n            card,")

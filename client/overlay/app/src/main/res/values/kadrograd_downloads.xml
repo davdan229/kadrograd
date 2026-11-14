@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="saved_download_unverified">Saved: %1$s · completeness unverified</string>
+    <string name="saved_download_incomplete">Saved: %1$s · download incomplete</string>
+</resources>

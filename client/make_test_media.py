@@ -46,6 +46,19 @@ video.m3u8
             "-c:a", "aac", "-f", "mpegts", legacy.name], root)
     with legacy.open("ab") as output:
         output.write((bytes((0x47, 0x1F, 0xFF, 0x10)) + bytes(184)) * 2_000)
+    (root / "legacy-hls.m3u8").write_text(
+        "#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXT-X-PLAYLIST-TYPE:VOD\n" +
+        "#EXTINF:1,\nlegacy-hls.mp4\n" * 12 + "#EXT-X-ENDLIST\n", encoding="utf-8")
+    for extension, video_codec, audio_codec in [("mp4", "libx264", "aac"), ("webm", "libvpx-vp9", "libopus")]:
+        ffmpeg(["-f", "lavfi", "-i", "testsrc2=s=640x360:r=12:d=12",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=12",
+                "-f", "lavfi", "-i", "sine=frequency=880:duration=12",
+                "-map", "0:v", "-map", "1:a", "-map", "2:a",
+                "-c:v", video_codec, "-threads", "2", "-g", "12", "-c:a", audio_codec,
+                "-metadata:s:a:0", "language=rus", "-metadata:s:a:0", "title=Voice A",
+                "-metadata:s:a:1", "language=rus", "-metadata:s:a:1", "title=Voice B",
+                *(["-preset", "ultrafast", "-movflags", "+faststart"] if extension == "mp4" else ["-deadline", "realtime", "-cpu-used", "8"]),
+                "voice-tracks." + extension], root)
     print("Generated", sum(p.stat().st_size for p in root.rglob("*") if p.is_file()), "bytes of synthetic test media")
 
 

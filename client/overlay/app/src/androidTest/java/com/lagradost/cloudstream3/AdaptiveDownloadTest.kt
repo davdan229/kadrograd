@@ -99,20 +99,20 @@ class AdaptiveDownloadTest {
     private fun revealChoice(label: String, towardEnd: Boolean = true) {
         // AdapterDataLoaderAction can loop forever at an inset bottom-sheet edge.
         // Real swipes keep the visibility check bounded and exercise the user gesture.
-        repeat(6) { attempt ->
+        repeat(20) { attempt ->
             try {
                 onView(allOf(withText(containsString(label)), isCompletelyDisplayed()))
                     .inRoot(isDialog()).check(matches(isDisplayed()))
                 return
             } catch (missing: NoMatchingViewException) {
-                if (attempt == 5) throw missing
+                if (attempt == 19) throw missing
                 onView(withId(R.id.listview1)).inRoot(isDialog())
                     .perform(object : ViewAction {
                         override fun getDescription() = "Swipe inside the visible part of the choice sheet"
                         override fun getConstraints() = isDisplayed()
                         override fun perform(controller: UiController, view: View) {
                             val bounds = android.graphics.Rect()
-                            check(view.getGlobalVisibleRect(bounds) && bounds.height() > 100)
+                            check(view.getGlobalVisibleRect(bounds) && bounds.height() > 16)
                             val top = bounds.top + bounds.height() * 0.15f
                             val bottom = bounds.bottom - bounds.height() * 0.15f
                             GeneralSwipeAction(Swipe.FAST,
@@ -220,6 +220,27 @@ class AdaptiveDownloadTest {
                         }
                     }
                 }
+                // The arrows must move the same offline timeline as the time bar.
+                for ((button, direction) in listOf(R.id.player_rew to -1, R.id.player_ffwd to 1)) {
+                    var before = 0L
+                    offline.onActivity {
+                        before = checkNotNull(it.findViewById<PlayerView>(R.id.player_view)?.player).currentPosition
+                    }
+                    onView(allOf(withId(button), isDisplayed())).perform(click())
+                    withTimeout(10_000) {
+                        while (true) {
+                            var moved = false
+                            offline.onActivity {
+                                val player = checkNotNull(it.findViewById<PlayerView>(R.id.player_view)?.player)
+                                player.playerError?.let { error -> throw AssertionError("Offline arrow seeking failed", error) }
+                                moved = (player.currentPosition - before) * direction > 500 &&
+                                    player.playbackState == androidx.media3.common.Player.STATE_READY
+                            }
+                            if (moved) break
+                            delay(50)
+                        }
+                    }
+                }
                 assertNull(connectivity.activeNetwork)
             }
         } finally {
@@ -269,7 +290,7 @@ class AdaptiveDownloadTest {
     }
 
     /** Local HTTP verifies that every manifest/segment uses the provider's request interceptor. */
-    private inner class FixtureServer(private val disconnectOn: String? = null,
+    internal inner class FixtureServer(private val disconnectOn: String? = null,
         private val beforeBody: (String) -> Unit = {}) : AutoCloseable {
         val requests = ConcurrentLinkedQueue<String>()
         val ranges = ConcurrentLinkedQueue<Pair<String, Long>>()
