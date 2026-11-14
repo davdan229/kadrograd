@@ -112,10 +112,12 @@ class SavedMediaTest {
             }, null) }
             try {
                 for ((path, type) in listOf("voice-tracks.mp4" to ExtractorLinkType.VIDEO, "hls/master.m3u8" to ExtractorLinkType.M3U8)) {
-                    fun link(voice: String) = newExtractorLink("Fixture", voice, "${server.origin}/$path?voice=$voice", type) {
+                    suspend fun link(voice: String) = newExtractorLink("Fixture", voice, "${server.origin}/$path?voice=$voice", type) {
                         headers = mapOf("X-Fixture-Auth" to "selected")
                     }
-                    main { sut.loadPlayer(context, false, link("A"), null, 0, emptySet(), null, false, false) }
+                    val first = link("A")
+                    val second = link("B")
+                    main { sut.loadPlayer(context, false, first, null, 0, emptySet(), null, false, false) }
                     ready(0)
                     main { sut.seekTo(6_000) }
                     ready(6_000)
@@ -137,13 +139,13 @@ class SavedMediaTest {
                         }
                     }
                     main { assertFalse(current.get()!!.playWhenReady) }
-                    main { sut.loadPlayer(context, true, link("B"), null, null, emptySet(), null, null, false) }
+                    main { sut.loadPlayer(context, true, second, null, null, emptySet(), null, null, false) }
                     ready(6_000)
                     main { assertFalse(current.get()!!.playWhenReady); sut.handleEvent(CSPlayerEvent.Play) }
                     // A rapid source change while the new player is buffering must not save isPlaying=false.
                     main {
-                        sut.loadPlayer(context, true, link("A"), null, null, emptySet(), null, null, false)
-                        sut.loadPlayer(context, true, link("B"), null, null, emptySet(), null, null, false)
+                        sut.loadPlayer(context, true, first, null, null, emptySet(), null, null, false)
+                        sut.loadPlayer(context, true, second, null, null, emptySet(), null, null, false)
                         assertTrue(current.get()!!.playWhenReady)
                     }
                     ready(6_000)
