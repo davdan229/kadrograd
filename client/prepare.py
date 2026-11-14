@@ -11,6 +11,7 @@ BASE = "app/src/main/java/com/lagradost/cloudstream3/"
 HASHES = {
     "app/build.gradle.kts": "4bd6bc507a747b44c084ea3d39295ff49857b7f1bf15f05a393ce076a823d11a",
     BASE + "ui/player/IGenerator.kt": "def8faa0e34926ee2dc9f7d1fce755f3df9b25163e74c7e8d7a9583d04c9b26b",
+    BASE + "ui/player/CS3IPlayer.kt": "8493a2815a06a14e2eb210cf9bb7c6e2cacf1845f92ff4f853bf1d432fd4e202",
     BASE + "utils/downloader/DownloadManager.kt": "46b6aae840806c01a93981800ab9e4ed3e71129c577d4cc7ea6cf58ea9de3002",
     BASE + "utils/InAppUpdater.kt": "11e1a1fbc74f820d84b08a57e74f0e168b311e6e28e8f4d235047672dfc849e7",
     BASE + "plugins/PluginManager.kt": "624f571a6cdb25fd4bc34c70e1b23ed541eb94fc34cf235d418a2e6975d6413e",
@@ -85,6 +86,34 @@ dependencies {
         "val LOADTYPE_INAPP_DOWNLOAD = setOf(\n    ExtractorLinkType.VIDEO,\n    ExtractorLinkType.M3U8\n)",
         "val LOADTYPE_INAPP_DOWNLOAD = setOf(\n    ExtractorLinkType.VIDEO,\n    ExtractorLinkType.DASH,\n    ExtractorLinkType.M3U8\n)")
 
+    path = BASE + "ui/player/CS3IPlayer.kt"
+    text = replace_once(changes[path], """        audioSources: List<MediaSource> = emptyList()
+    ): ExoPlayer""", """        audioSources: List<MediaSource> = emptyList(),
+        downloadedFile: Boolean = false,
+    ): ExoPlayer""")
+    text = replace_once(text, """            .setFragmentedMp4ExtractorFlags(FragmentedMp4Extractor.FLAG_MERGE_FRAGMENTED_SIDX)
+
+        // Create an online connection""", """            .setFragmentedMp4ExtractorFlags(FragmentedMp4Extractor.FLAG_MERGE_FRAGMENTED_SIDX)
+            .apply {
+                if (downloadedFile) {
+                    // Older HLS downloads store MPEG-TS under .mp4. Look farther for
+                    // PCR timestamps so padding or a large last frame won't disable seeking.
+                    setTsExtractorTimestampSearchBytes(2 * 1024 * 1024)
+                }
+            }
+
+        // Create an online connection""")
+    text = replace_once(text, """        onlineSource: HttpDataSource.Factory? = null,
+    ) {
+        Log.i(TAG, "loadExo")""", """        onlineSource: HttpDataSource.Factory? = null,
+        downloadedFile: Boolean = false,
+    ) {
+        Log.i(TAG, "loadExo")""")
+    text = replace_once(text, "                onlineSource = onlineSource,\n            )\n\n            event(PlayerAttachedEvent",
+        "                onlineSource = onlineSource,\n                downloadedFile = downloadedFile,\n            )\n\n            event(PlayerAttachedEvent")
+    changes[path] = replace_once(text, "            loadExo(context, listOf(MediaItemSlice(mediaItem, Long.MIN_VALUE)), subSources)",
+        "            loadExo(context, listOf(MediaItemSlice(mediaItem, Long.MIN_VALUE)), subSources, downloadedFile = true)")
+
     path = BASE + "utils/downloader/DownloadManager.kt"
     text = replace_once(changes[path], " || link.type == ExtractorLinkType.DASH", " /* DASH is handled by AdaptiveDownload below. */")
     text = replace_once(text, "            if (total <= 0) return null// crash, invalid data", "            // Adaptive exports can start before a size estimate is available.")
@@ -136,6 +165,20 @@ dependencies {
             // Remove link loading notification""")
     text = replace_once(text, "} else if (currentLinks.isEmpty()) {", "} else if (candidates.isEmpty()) {")
     text = replace_once(text, "val sortedLinks = currentLinks.sortedBy", "val sortedLinks = candidates.sortedBy")
+    text = replace_once(text, """            metadata.type = DownloadType.IsDone
+            return@withContext DOWNLOAD_SUCCESS
+        } catch (t: Throwable) {
+            logError(t)
+            metadata.type = DownloadType.IsFailed
+            return@withContext metadata.failedStatus()""", """            // At EOF the number of bytes written is exact, including resumed segments.
+            metadata.totalBytes = metadata.bytesWritten
+            metadata.bytesDownloaded = metadata.bytesWritten
+            metadata.type = DownloadType.IsDone
+            return@withContext DOWNLOAD_SUCCESS
+        } catch (t: Throwable) {
+            logError(t)
+            metadata.type = DownloadType.IsFailed
+            return@withContext metadata.failedStatus()""")
     changes[path] = replace_once(text, "        } catch (_: Throwable) {\n            return DOWNLOAD_FAILED\n        } finally {\n            extractorJob.cancel()",
         "        } catch (cancelled: CancellationException) {\n            throw cancelled\n        } catch (_: Throwable) {\n            return DOWNLOAD_FAILED\n        } finally {\n            extractorJob.cancel()")
 

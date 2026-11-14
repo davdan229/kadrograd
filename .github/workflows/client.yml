@@ -158,8 +158,8 @@ jobs:
       - name: Verify adaptive downloads on Android
         timeout-minutes: 25
         env:
-          KADROGRAD_UPGRADE_FROM: https://github.com/davdan229/kadrograd/releases/download/client-v1.0.0-beta.4/CloudStream-Kadrograd-1.0.0-beta.4.apk
-          KADROGRAD_UPGRADE_SHA256: 83a6836f8668ebd44b9cb8568b087e1206f08fecd6b7d1b1f184ff489ba8d3a0
+          KADROGRAD_UPGRADE_FROM: https://github.com/davdan229/kadrograd/releases/download/client-v1.0.0-beta.5/CloudStream-Kadrograd-1.0.0-beta.5.apk
+          KADROGRAD_UPGRADE_SHA256: 1c1fea1f2add18c3914d55dd6430343b8d760b23cb3165d10b45acc5e9b631d0
           KADROGRAD_ANDROID_API: ${{ inputs.android_api || '35' }}
           KADROGRAD_CHECK_SUITE: ${{ inputs.check_suite || 'all' }}
           KADROGRAD_MOVIE_QUERY: ${{ inputs.movie_query }}
