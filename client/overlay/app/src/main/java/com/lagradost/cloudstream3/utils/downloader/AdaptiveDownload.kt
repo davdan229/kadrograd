@@ -112,18 +112,25 @@ object AdaptiveDownload {
         private var received = 0L
         private var expected = C.LENGTH_UNSET.toLong()
         private var attempts = 0
+        private var firstFailure = 0L
 
         private fun retry(error: IOException) {
             gate.awaitReady()
-            if (attempts >= 3 || Thread.currentThread().isInterrupted ||
+            if (Thread.currentThread().isInterrupted ||
                 (error is InterruptedIOException && error !is SocketTimeoutException) ||
                 (error is HttpDataSource.InvalidResponseCodeException &&
                     error.responseCode !in setOf(408, 429) && error.responseCode !in 500..599)) throw error
-            attempts++
+            val now = SystemClock.elapsedRealtime()
+            if (attempts == 0) firstFailure = now
+            val remaining = 90_000L - (now - firstFailure)
+            if (remaining <= 0) throw error
             runCatching { upstream.close() }
             val retryAfter = (error as? HttpDataSource.InvalidResponseCodeException)?.headerFields?.entries
                 ?.firstOrNull { it.key.equals("Retry-After", true) }?.value?.firstOrNull()?.toLongOrNull()
-            gate.retryDelay(retryAfter?.coerceIn(1, 30)?.times(1_000) ?: (250L shl (attempts - 1)))
+            val delay = retryAfter?.coerceIn(1, 30)?.times(1_000) ?: (250L shl attempts.coerceAtMost(6))
+            if (delay > remaining) throw error
+            attempts++
+            gate.retryDelay(delay)
         }
 
         private fun connect(): Long {

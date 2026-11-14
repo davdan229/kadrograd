@@ -59,7 +59,13 @@ class LiveDownloadTest {
                 val choices = DownloadChoices.select(links)
                 android.util.Log.i("KadrogradDownloadTest", "Available choices: ${choices.map { Triple(it.quality, it.type, it.name) }}")
                 val height = InstrumentationRegistry.getArguments().getString("movieQuality")?.toIntOrNull() ?: 1080
+                val format = when (InstrumentationRegistry.getArguments().getString("movieFormat")) {
+                    "dash" -> ExtractorLinkType.DASH
+                    "hls" -> ExtractorLinkType.M3U8
+                    else -> null
+                }
                 val selected = choices.firstOrNull { it.quality == height &&
+                    (format == null || it.type == format) &&
                     it.type in setOf(ExtractorLinkType.DASH, ExtractorLinkType.M3U8) && provider.getVideoInterceptor(it) != null }
                     ?: error("No selected adaptive quality $height; available=${choices.map { it.quality to it.type }}")
                 var lastLog = 0L

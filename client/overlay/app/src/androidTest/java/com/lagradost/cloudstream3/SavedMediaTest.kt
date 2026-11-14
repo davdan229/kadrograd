@@ -121,10 +121,10 @@ class SavedMediaTest {
                     ready(6_000)
                     var chosenId: String? = null
                     main {
-                        val tracks = sut.getVideoTracks().allAudioTracks
-                        assertTrue("Fixture must expose two voices", tracks.size >= 2)
-                        val track = tracks.last()
-                        chosenId = track.id
+                        val tracks = sut.getVideoTracks()
+                        val previousId = checkNotNull(tracks.currentAudioTrack?.id)
+                        val track = tracks.allAudioTracks.first { it.id != null && it.id != previousId }
+                        chosenId = checkNotNull(track.id)
                         sut.setPreferredAudioTrack(track.language, track.id, track.formatIndex)
                     }
                     ready(6_000)

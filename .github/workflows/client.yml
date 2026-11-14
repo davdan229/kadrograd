@@ -39,6 +39,12 @@ on:
         required: false
         default: '1080'
         type: string
+      movie_format:
+        description: 'Adaptive protocol for the opt-in transfer'
+        required: false
+        type: choice
+        options: [auto, dash, hls]
+        default: auto
 permissions:
   contents: read
   actions: read
@@ -164,6 +170,7 @@ jobs:
           KADROGRAD_CHECK_SUITE: ${{ inputs.check_suite || 'all' }}
           KADROGRAD_MOVIE_QUERY: ${{ inputs.movie_query }}
           KADROGRAD_MOVIE_QUALITY: ${{ inputs.movie_quality }}
+          KADROGRAD_MOVIE_FORMAT: ${{ inputs.movie_format }}
         run: bash client/run_android_checks.sh .client-work/upstream
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()

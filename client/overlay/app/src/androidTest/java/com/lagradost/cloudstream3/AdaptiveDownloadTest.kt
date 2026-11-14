@@ -295,10 +295,12 @@ class AdaptiveDownloadTest {
 
     /** Local HTTP verifies that every manifest/segment uses the provider's request interceptor. */
     internal inner class FixtureServer(private val disconnectOn: String? = null,
+        private val retryFailures: Int = 0,
         private val beforeBody: (String) -> Unit = {}) : AutoCloseable {
         val requests = ConcurrentLinkedQueue<String>()
         val ranges = ConcurrentLinkedQueue<Pair<String, Long>>()
         private val broken = AtomicBoolean(false)
+        private val failures = java.util.concurrent.atomic.AtomicInteger(retryFailures)
         private val server = ServerSocket(0)
         private val executor = Executors.newFixedThreadPool(4)
         val origin = "http://127.0.0.1:${server.localPort}"
@@ -322,6 +324,13 @@ class AdaptiveDownloadTest {
                         val start = range?.groupValues?.get(1)?.toIntOrNull() ?: 0
                         val end = minOf(range?.groupValues?.get(2)?.toIntOrNull() ?: Int.MAX_VALUE, (bytes?.size ?: 0) - 1)
                         ranges.add(path to start.toLong())
+                        if (start > 0 && disconnectOn != null && path.contains(disconnectOn) && failures.getAndDecrement() > 0) {
+                            it.getOutputStream().apply {
+                                write("HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+                                flush()
+                            }
+                            return@use
+                        }
                         val status = when { bytes == null -> "403 Forbidden"; start > end -> "416 Range Not Satisfiable"; range != null -> "206 Partial Content"; else -> "200 OK" }
                         val body = if (bytes != null && start <= end) bytes.copyOfRange(start, end + 1) else byteArrayOf()
                         val contentRange = if (range != null && body.isNotEmpty()) "Content-Range: bytes $start-$end/${bytes!!.size}\r\n" else ""
@@ -649,13 +658,16 @@ class AdaptiveDownloadTest {
     }
 
     @Test fun interruptedMediaReadContinuesFromItsReceivedOffset() = runBlocking {
-        FixtureServer(disconnectOn = "/chunk-0-").use { server ->
+        FixtureServer(disconnectOn = "/chunk-0-", retryFailures = 4).use { server ->
             val output = File.createTempFile("adaptive-range-retry-", ".webm", context.cacheDir)
             try {
                 val link = newExtractorLink("Fixture", "Studio B", "${server.origin}/dash/manifest.mpd", ExtractorLinkType.DASH) { quality = 2160 }
                 assertTrue(withTimeout(60_000) { AdaptiveDownload.exportToFile(context, link, output, selection(2160, 4)) })
                 assertTracks(output, 3840, 2160)
                 assertTrue("The broken chunk did not resume with a byte range", server.ranges.any { it.first.contains("/chunk-0-") && it.second > 0 })
+                val resumed = server.ranges.filter { it.first.contains("/chunk-0-") && it.second > 0 }
+                assertTrue("The transfer did not survive a sustained outage", resumed.size >= 5)
+                assertEquals(1, resumed.distinct().size)
                 assertEquals(1, server.requests.count { it.endsWith("manifest.mpd") })
                 assertEquals(1, server.requests.count { it.contains("init-0.webm") })
             } finally { output.delete() }
@@ -702,7 +714,7 @@ class AdaptiveDownloadTest {
     }
 
     @Test fun hlsWithSeparateAudioRecoversAndSavesTheSelectedVoice() = runBlocking {
-        FixtureServer(disconnectOn = "/video-1.ts").use { server ->
+        FixtureServer(disconnectOn = "/video-1.ts", retryFailures = 4).use { server ->
             val output = File.createTempFile("adaptive-hls-", ".mp4", context.cacheDir)
             try {
                 val link = newExtractorLink("Fixture", "Studio B", "${server.origin}/hls/master.m3u8", ExtractorLinkType.M3U8) { quality = 1080 }
@@ -711,6 +723,9 @@ class AdaptiveDownloadTest {
                 assertTrue(server.requests.any { it.contains("audio-b-") })
                 assertFalse(server.requests.any { it.contains("audio-a") })
                 assertTrue("HLS did not resume the interrupted segment", server.ranges.any { it.first.endsWith("/video-1.ts") && it.second > 0 })
+                val resumed = server.ranges.filter { it.first.endsWith("/video-1.ts") && it.second > 0 }
+                assertTrue("HLS did not survive a sustained outage", resumed.size >= 5)
+                assertEquals(1, resumed.distinct().size)
                 assertEquals(1, server.requests.count { it.endsWith("/master.m3u8") })
             } finally { output.delete() }
         }

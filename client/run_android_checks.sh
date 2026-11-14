@@ -66,6 +66,7 @@ verify_live_transfer() {
 import os, shlex, subprocess, sys
 args = ['am', 'instrument', '-w', '-r', '-e', 'movieQuery', os.environ['KADROGRAD_MOVIE_QUERY'],
         '-e', 'movieQuality', os.environ.get('KADROGRAD_MOVIE_QUALITY') or '1080',
+        '-e', 'movieFormat', os.environ.get('KADROGRAD_MOVIE_FORMAT') or 'auto',
         '-e', 'class', 'com.lagradost.cloudstream3.LiveDownloadTest',
         'ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner']
 sys.exit(subprocess.run(['adb', 'shell', shlex.join(args)], timeout=1010).returncode)
