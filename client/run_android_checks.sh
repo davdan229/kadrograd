@@ -103,7 +103,7 @@ fi
 if [ "$check_suite" != all ]; then
   if [ "$check_suite" = ui ]; then
     classes='com.lagradost.cloudstream3.AdaptiveDownloadTest,com.lagradost.cloudstream3.SavedMediaTest,com.lagradost.cloudstream3.KadrogradHomeTest#sourcePickerListsAllBundledSourcesAndKeepsLaterFilterChanges'
-    expected='OK (16 tests)'
+    expected='OK (17 tests)'
   else
     classes='com.lagradost.cloudstream3.KadrogradHomeTest#allBundledSourcesHaveAVisibleHeroAndPlayButton'
     expected='OK (1 test)'
@@ -129,7 +129,7 @@ if [ "$check_suite" != all ]; then
   exit "$status"
 fi
 timeout 300 adb shell am instrument -w -r -e keepOfflineFixture true -e class 'com.lagradost.cloudstream3.AdaptiveDownloadTest,com.lagradost.cloudstream3.SavedMediaTest' ru.kadrograd.cloudstream.test/androidx.test.runner.AndroidJUnitRunner | tee "$results/instrumentation.txt" || status=1
-grep -q 'OK (15 tests)' "$results/instrumentation.txt" || status=1
+grep -q 'OK (16 tests)' "$results/instrumentation.txt" || status=1
 if grep -q 'FAILURES!!!' "$results/instrumentation.txt"; then status=1; fi
 if [ "$status" = 0 ]; then verify_offline_restart; fi
 if [ "$status" = 0 ]; then verify_crash_recovery; fi

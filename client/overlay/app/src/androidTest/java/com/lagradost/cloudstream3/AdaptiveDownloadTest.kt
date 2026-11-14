@@ -695,6 +695,68 @@ class AdaptiveDownloadTest {
         } }
     }
 
+    @Test fun aReopenedDownloadReusesSavedSegmentsForDashAndHls() = runBlocking<Unit> {
+        for ((manifest, type, segment) in listOf(
+            Triple("dash/manifest.mpd", ExtractorLinkType.DASH, "/chunk-1-"),
+            Triple("hls/master.m3u8", ExtractorLinkType.M3U8, "/video-"),
+        )) {
+            val id = -912530 - type.ordinal
+            val blocked = CountDownLatch(1)
+            val unblock = CountDownLatch(1)
+            val hold = AtomicBoolean(true)
+            FixtureServer { path ->
+                if (path.contains(segment) && (path.contains("00005") || path.endsWith("video-4.ts")) && hold.get()) {
+                    blocked.countDown()
+                    unblock.await(15, TimeUnit.SECONDS)
+                }
+            }.use { server ->
+                val first = File.createTempFile("adaptive-before-reopen-", ".media", context.cacheDir)
+                val final = File.createTempFile("adaptive-after-reopen-", ".media", context.cacheDir)
+                val link = newExtractorLink("Fixture", "Studio B", "${server.origin}/$manifest", type) { quality = 1080 }
+                try {
+                    val running = AtomicBoolean(true)
+                    val cache = withContext(Dispatchers.IO) {
+                        com.lagradost.cloudstream3.utils.downloader.AdaptiveTransferCache(context, id, link)
+                    }
+                    try {
+                        coroutineScope {
+                            val transfer = async {
+                                AdaptiveDownload.exportToFile(context, link, first, selection(1080, 4),
+                                    keepRunning = running::get, segmentCache = cache)
+                            }
+                            try {
+                                withContext(Dispatchers.IO) { assertTrue("Transfer did not reach the interruption point", blocked.await(15, TimeUnit.SECONDS)) }
+                            } finally {
+                                running.set(false)
+                                hold.set(false)
+                                unblock.countDown()
+                            }
+                            assertFalse(withTimeout(10_000) { transfer.await() })
+                        }
+                    } finally { withContext(Dispatchers.IO) { cache.close() } }
+                    val alreadyFetched = server.requests.first { it.contains(segment) }
+                    val requestsBefore = server.requests.count { it == alreadyFetched }
+                    val reopened = withContext(Dispatchers.IO) {
+                        com.lagradost.cloudstream3.utils.downloader.AdaptiveTransferCache(context, id, link)
+                    }
+                    try {
+                        assertTrue(withTimeout(60_000) {
+                            AdaptiveDownload.exportToFile(context, link, final, selection(1080, 4), segmentCache = reopened)
+                        })
+                    } finally { withContext(Dispatchers.IO) { reopened.close() } }
+                    assertEquals("Previously saved segment was downloaded again", requestsBefore,
+                        server.requests.count { it == alreadyFetched })
+                    assertEquals(2, server.requests.count { it == "/$manifest" })
+                    assertTracks(final, 1920, 1080)
+                } finally {
+                    first.delete()
+                    final.delete()
+                    withContext(Dispatchers.IO) { com.lagradost.cloudstream3.utils.downloader.AdaptiveTransferCache.discard(context, id) }
+                }
+            }
+        }
+    }
+
     @Test fun aNetworkWaitDoesNotTriggerTheLocalExportWatchdog() = runBlocking {
         val delayed = AtomicBoolean(false)
         FixtureServer { path ->

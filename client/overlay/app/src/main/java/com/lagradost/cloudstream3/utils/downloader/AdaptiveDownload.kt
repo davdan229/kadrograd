@@ -189,6 +189,7 @@ object AdaptiveDownload {
         isPaused: () -> Boolean = { false },
         progress: (Int, Long, Long) -> Unit = { _, _, _ -> },
         container: (String) -> Unit = {},
+        segmentCache: AdaptiveTransferCache? = null,
     ): Boolean = withContext(Dispatchers.Main.immediate) {
         val estimate = AdaptiveSizeEstimate()
         val client = OkHttpClient.Builder()
@@ -220,8 +221,38 @@ object AdaptiveDownload {
                 if (isNetwork) transferred.addAndGet(bytesTransferred.toLong())
             }
         }
-        val dataSource = DataSource.Factory {
+        val network = DataSource.Factory {
             PausableDataSource(upstream.createDataSource(), gate).apply { addTransferListener(transferListener) }
+        }
+        val cached = segmentCache?.factory(network)
+        val dataSource = if (cached == null) network else DataSource.Factory {
+            val raw = network.createDataSource()
+            object : DataSource by raw {
+                private var selected: DataSource = raw
+                private val listeners = mutableListOf<TransferListener>()
+                override fun open(dataSpec: DataSpec): Long {
+                    // Refresh the playlist on every attempt. The cache contains media only.
+                    val path = dataSpec.uri.path.orEmpty()
+                    val manifest = dataSpec.isFlagSet(DataSpec.FLAG_ALLOW_GZIP) ||
+                        path.endsWith(".mpd", true) || path.endsWith(".m3u8", true) ||
+                        dataSpec.uri.toString().substringBefore('#') == link.url.substringBefore('#')
+                    selected = if (manifest) raw else cached.createDataSource().apply {
+                        listeners.forEach(::addTransferListener)
+                    }
+                    val request = if (manifest) dataSpec else dataSpec.buildUpon()
+                        .setFlags(dataSpec.flags or DataSpec.FLAG_ALLOW_CACHE_FRAGMENTATION).build()
+                    return selected.open(request)
+                }
+                override fun read(buffer: ByteArray, offset: Int, length: Int): Int = selected.read(buffer, offset, length)
+                override fun getUri(): Uri? = selected.uri
+                override fun getResponseHeaders(): Map<String, List<String>> = selected.responseHeaders
+                override fun addTransferListener(listener: TransferListener) {
+                    listeners.add(listener)
+                    raw.addTransferListener(listener)
+                    if (selected !== raw) selected.addTransferListener(listener)
+                }
+                override fun close() = selected.close()
+            }
         }
         val mediaSource = DefaultMediaSourceFactory(dataSource)
         val loader = ExoPlayerAssetLoader.Factory(context, DefaultDecoderFactory.Builder(context).build(), Clock.DEFAULT, mediaSource)
@@ -302,6 +333,7 @@ object AdaptiveDownload {
         val temporaryUri = Uri.fromFile(output)
         var destination: DownloadObjects.StreamData? = null
         var complete = false
+        var segmentCache: AdaptiveTransferCache? = null
         var extension = "mp4"
         try {
             metadata.hlsTotal = null
@@ -315,6 +347,7 @@ object AdaptiveDownload {
             output.delete()
             metadata.setResumeLength(0)
             metadata.hlsProgress = 0
+            segmentCache = withContext(Dispatchers.IO) { AdaptiveTransferCache(context, id, link) }
             val exported = exportToFile(context, link, output, interceptor,
                 keepRunning = { metadata.type != DownloadType.IsStopped },
                 isPaused = { metadata.type == DownloadType.IsPaused },
@@ -330,7 +363,7 @@ object AdaptiveDownload {
                     activeProgress[id] = Progress(percentage, estimate)
                     activeFiles[id] = DownloadObjects.DownloadedFileInfoResult(bytes, metadata.approxTotalBytes, temporaryUri)
                     metadata.type = metadata.type
-                }, container = { extension = it })
+                }, container = { extension = it }, segmentCache = segmentCache)
             if (!exported) return@withContext DownloadStatus(false, false, true)
             val (baseFile, basePath) = context.getBasePath()
             requireNotNull(baseFile) { "Download folder is unavailable" }
@@ -384,8 +417,13 @@ object AdaptiveDownload {
             // failures are retried in place by PausableDataSource instead.
             DownloadStatus(false, false, false)
         } finally {
+            val discardSegments = complete || metadata.type == DownloadType.IsStopped
             withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) {
                 try {
+                    try {
+                        segmentCache?.close()
+                        if (discardSegments) AdaptiveTransferCache.discard(context, id)
+                    } catch (error: Exception) { logError(error) }
                     if (!complete) destination?.delete()
                     output.delete()
                 } finally {
