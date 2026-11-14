@@ -67,7 +67,7 @@ def apply(root):
     text = replace_once(text, 'applicationId = "com.lagradost.cloudstream3"', f'applicationId = "{CONFIG["applicationId"]}"')
     text = replace_once(text, "versionCode = libs.versions.versionCode.get().toInt()", f'versionCode = {CONFIG["versionCode"]}')
     text = replace_once(text, "versionName = libs.versions.versionName.get()", f'versionName = "{CONFIG["versionName"]}"')
-    text = replace_once(text, "implementation(libs.bundles.media3)", 'implementation(libs.bundles.media3)\n    implementation("androidx.media3:media3-transformer:1.9.3")')
+    text = replace_once(text, "implementation(libs.bundles.media3)", 'implementation(libs.bundles.media3)\n    implementation("androidx.media3:media3-transformer:1.9.3")\n    implementation(libs.ktor.http)')
     text = replace_once(text, "dependencies {\n    // Testing", """// Instrumentation and the app share j$ classes. Configure L8 after AGP's task
 // creation actions so that both APKs retain the same public compatibility APIs.
 afterEvaluate {
@@ -192,7 +192,6 @@ dependencies {
     path = BASE + "utils/downloader/DownloadManager.kt"
     text = replace_once(changes[path], "                        extraInfo = if (isHLS) hlsWrittenProgress.toString() else null",
         """                        completedBytes = if (internalType == DownloadType.IsDone) bytesWritten else null,
-                        hlsTotalSegments = if (isHLS) hlsTotal else null,
                         extraInfo = if (isHLS) hlsWrittenProgress.toString() else null""")
     text = replace_once(text, "            if (isHLS || totalBytes == null) {",
         "            if (isHLS || totalBytes == null || internalType == DownloadType.IsDone) {")
@@ -203,8 +202,7 @@ dependencies {
         '        @JsonProperty("subs") val subs: List<SubtitleData>? = null,\n        @JsonProperty("batchChoice") val batchChoice: BatchChoice? = null,')
     text = replace_once(text, '        @JsonProperty("linkHash") val linkHash : Int? = null',
         '''        @JsonProperty("linkHash") val linkHash : Int? = null,
-        @JsonProperty("completedBytes") val completedBytes: Long? = null,
-        @JsonProperty("hlsTotalSegments") val hlsTotalSegments: Int? = null''')
+        @JsonProperty("completedBytes") val completedBytes: Long? = null''')
     changes[path] = replace_once(text, "    /** General data about the episode and show to start a download from. */", """    data class BatchChoice(
         @JsonProperty("source") val source: String,
         @JsonProperty("quality") val quality: Int,

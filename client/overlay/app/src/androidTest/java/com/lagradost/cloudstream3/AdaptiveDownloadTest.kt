@@ -276,7 +276,11 @@ class AdaptiveDownloadTest {
                 DownloadObjects.DownloadEpisodeCached(title, null, 0, null, id, description = null,
                     cacheTime = System.currentTimeMillis(), id = id))
             CloudStreamApp.setKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, key,
-                DownloadObjects.DownloadedFileInfo(length, "", file.name, extraInfo = "12", basePath = directory.absolutePath))
+                DownloadObjects.DownloadedFileInfo(length + 2_000_000, "", file.name, extraInfo = "12", basePath = directory.absolutePath))
+            // Without a surviving manifest/receipt, display the saved bytes honestly.
+            val saved = checkNotNull(VideoDownloadManager.getDownloadFileInfo(context, id))
+            assertEquals(length, saved.fileLength)
+            assertEquals(0L, saved.totalBytes)
             playFromDownloadsOffline(640, 360, title)
             assertEquals(length, file.length())
             assertEquals(modified, file.lastModified())

@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.net.Uri
+import android.os.Build
 import com.lagradost.cloudstream3.CloudStreamApp
 import com.lagradost.cloudstream3.R
 import com.lagradost.cloudstream3.app
@@ -18,6 +19,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import okhttp3.Request
 import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
@@ -138,7 +140,10 @@ internal object DownloadRecordRepair {
             if (!text.trimStart().startsWith("#EXTM3U")) return null
             val master = HlsPlaylistParser.parse(url, text)
             if (master != null) {
-                val best = master.variants.filter { it.isPlayableStandalone(master) }.maxByOrNull { it.format.height } ?: return null
+                // Match the rendition order used by the original downloader.
+                val best = master.variants.filter { it.isPlayableStandalone(master) }.maxByOrNull {
+                    it.format.width.toLong() * it.format.height * 1000 + it.format.averageBitrate
+                } ?: return null
                 url = best.url.toString()
             } else {
                 if (!text.lineSequence().any { it.trim() == "#EXT-X-ENDLIST" }) return null
@@ -195,15 +200,30 @@ internal object DownloadRecordRepair {
                 val duration = expectedDuration ?: if (format.containsKey(MediaFormat.KEY_DURATION)) format.getLong(MediaFormat.KEY_DURATION) else 0
                 if (duration <= 0) return Probe(indexed, false)
                 extractor.selectTrack(track)
-                extractor.seekTo((duration - 2_000_000).coerceAtLeast(0), MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+                extractor.seekTo(0, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+                val firstTime = extractor.sampleTime.coerceAtLeast(0)
+                val endTime = firstTime + duration
+                extractor.seekTo((endTime - 2_000_000).coerceAtLeast(firstTime), MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
                 var samples = 0
                 var lastTime = -1L
+                var previousTime = -1L
+                var buffer = ByteBuffer.allocate(64 * 1024)
                 while (extractor.sampleTime >= 0 && samples++ < 4096) {
+                    val size = if (Build.VERSION.SDK_INT >= 28) extractor.sampleSize else -1L
+                    if ((Build.VERSION.SDK_INT >= 28 && size < 0) || size > 16 * 1024 * 1024) return Probe(indexed, false)
+                    if (size > buffer.capacity()) buffer = ByteBuffer.allocate(size.toInt())
+                    if (size < 0 && buffer.capacity() < 4 * 1024 * 1024) buffer = ByteBuffer.allocate(4 * 1024 * 1024)
+                    buffer.clear()
+                    // Advancing the index alone can accept entries whose payload is missing.
+                    val read = extractor.readSampleData(buffer, 0).toLong()
+                    if (read < 0 || (size >= 0 && read != size)) return Probe(indexed, false)
+                    previousTime = lastTime
                     lastTime = extractor.sampleTime
                     if (!extractor.advance()) break
                 }
                 extractor.unselectTrack(track)
-                if (lastTime < (duration - 1_500_000).coerceAtLeast(0)) return Probe(indexed, false)
+                val sampleInterval = if (previousTime >= 0) (lastTime - previousTime).coerceIn(1, 1_000_000) else 100_000L
+                if (lastTime < endTime - sampleInterval - 100_000) return Probe(indexed, false)
             }
             Probe(indexed, true)
         } catch (_: Exception) { Probe(indexed, false) }
