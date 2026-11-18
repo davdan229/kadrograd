@@ -28,6 +28,8 @@ class LiveDownloadTest {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         val query = InstrumentationRegistry.getArguments().getString("movieQuery").orEmpty()
+        val sourceName = InstrumentationRegistry.getArguments().getString("sourceName").orEmpty().ifBlank { "Кадроград · Zona" }
+        val episodeNumber = InstrumentationRegistry.getArguments().getString("episodeNumber")?.toIntOrNull()
         require(query.isNotBlank()) { "movieQuery is required for the opt-in live transfer" }
         val directory = File(context.getExternalFilesDir(null), "live-download-${System.nanoTime()}").apply { mkdirs() }
         val id = -75184910
@@ -42,9 +44,9 @@ class LiveDownloadTest {
                 .putInt("app_layout_key", 0).putBoolean("auto_update_plugins", false).commit()
             ActivityScenario.launch(MainActivity::class.java).use {
                 withTimeout(60_000) {
-                    while (getApiFromNameNull("Кадроград · Zona") == null) delay(100)
+                    while (getApiFromNameNull(sourceName) == null) delay(100)
                 }
-                val provider = checkNotNull(getApiFromNameNull("Кадроград · Zona"))
+                val provider = checkNotNull(getApiFromNameNull(sourceName))
                 val baseClient = app.baseClient
                 previousClient = baseClient
                 app.baseClient = baseClient.newBuilder().addInterceptor { chain ->
@@ -60,9 +62,16 @@ class LiveDownloadTest {
                 }.build()
                 assertTrue(provider.hasDownloadSupport)
                 val hit = checkNotNull(provider.search(query)?.firstOrNull { it.name.equals(query, true) }) { "Exact movie not found" }
-                val movie = provider.load(hit.url) as? MovieLoadResponse ?: error("Expected a movie")
+                val title = checkNotNull(provider.load(hit.url))
+                val selectedEpisode = when (title) {
+                    is MovieLoadResponse -> null
+                    is AnimeLoadResponse -> title.episodes.values.flatten().single { it.episode == episodeNumber }
+                    is TvSeriesLoadResponse -> title.episodes.single { it.episode == episodeNumber }
+                    else -> error("Unsupported title")
+                }
+                val data = (title as? MovieLoadResponse)?.dataUrl ?: checkNotNull(selectedEpisode).data
                 val links = mutableListOf<ExtractorLink>()
-                provider.loadLinks(movie.dataUrl, false, {}, links::add)
+                provider.loadLinks(data, false, {}, links::add)
                 val choices = DownloadChoices.select(links)
                 android.util.Log.i("KadrogradDownloadTest", "Available choices: ${choices.map { Triple(it.quality, it.type, it.name) }}")
                 val height = InstrumentationRegistry.getArguments().getString("movieQuality")?.toIntOrNull() ?: 1080
@@ -76,7 +85,7 @@ class LiveDownloadTest {
                     (if (format != null) it.type == format else it.type in setOf(ExtractorLinkType.DASH, ExtractorLinkType.M3U8)) }
                     ?: error("No selected stream at $height; available=${choices.map { it.quality to it.type }}")
                 val episode = DownloadObjects.DownloadEpisodeMetadata(id, id, "Full transfer", provider.name,
-                    null, null, null, null, TvType.Movie)
+                    null, null, selectedEpisode?.season, selectedEpisode?.episode, title.type)
                 val downloaded = withTimeout(15 * 60_000L) {
                     VideoDownloadManager.downloadSingleEpisode(context, null, "", episode, selected, { _, _ -> })
                 }
@@ -90,8 +99,8 @@ class LiveDownloadTest {
                     extractor.setDataSource(output.absolutePath)
                     val formats = (0 until extractor.trackCount).map(extractor::getTrackFormat)
                     val video = formats.single { it.getString(MediaFormat.KEY_MIME)!!.startsWith("video/") }
-                    assertTrue(video.getLong(MediaFormat.KEY_DURATION) > 60 * 60_000_000L)
-                    movie.duration?.takeIf { it > 0 }?.let { minutes ->
+                    assertTrue(video.getLong(MediaFormat.KEY_DURATION) > (if (selectedEpisode == null) 60 else 15) * 60_000_000L)
+                    title.duration?.takeIf { it > 0 }?.let { minutes ->
                         assertTrue("The saved movie ends before its catalog duration",
                             video.getLong(MediaFormat.KEY_DURATION) >= (minutes - 3).coerceAtLeast(1) * 60_000_000L)
                     }

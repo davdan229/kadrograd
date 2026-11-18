@@ -45,6 +45,15 @@ on:
         type: choice
         options: [auto, dash, hls, mp4]
         default: auto
+      source_name:
+        description: 'Provider for the opt-in transfer'
+        required: false
+        type: string
+        default: 'Кадроград · Zona'
+      episode_number:
+        description: 'Episode number for a series or anime transfer'
+        required: false
+        type: string
 permissions:
   contents: read
   actions: read
@@ -171,6 +180,8 @@ jobs:
           KADROGRAD_MOVIE_QUERY: ${{ inputs.movie_query }}
           KADROGRAD_MOVIE_QUALITY: ${{ inputs.movie_quality }}
           KADROGRAD_MOVIE_FORMAT: ${{ inputs.movie_format }}
+          KADROGRAD_SOURCE_NAME: ${{ inputs.source_name }}
+          KADROGRAD_EPISODE_NUMBER: ${{ inputs.episode_number }}
         run: bash client/run_android_checks.sh .client-work/upstream
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
