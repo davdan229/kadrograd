@@ -5,6 +5,7 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.preference.PreferenceManager
 import androidx.test.platform.app.InstrumentationRegistry
 import com.lagradost.cloudstream3.ui.player.CS3IPlayer
 import com.lagradost.cloudstream3.ui.player.CSPlayerEvent
@@ -12,6 +13,7 @@ import com.lagradost.cloudstream3.ui.player.ErrorEvent
 import com.lagradost.cloudstream3.ui.player.PlayerAttachedEvent
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.downloader.DownloadFileManagement.getFileName
 import com.lagradost.cloudstream3.utils.downloader.DownloadObjects
 import com.lagradost.cloudstream3.utils.downloader.DownloadRecordRepair
 import com.lagradost.cloudstream3.utils.downloader.VideoDownloadManager
@@ -57,6 +59,42 @@ class SavedMediaTest {
             }
         } catch (error: Exception) { error.toString() }
         finally { extractor.release() }
+    }
+
+    @Test fun incompatibleHlsResumeKeepsTheSavedFileIncomplete() = runBlocking<Unit> {
+        AdaptiveDownloadTest().FixtureServer().use { server ->
+            val settings = PreferenceManager.getDefaultSharedPreferences(context)
+            val pathKey = context.getString(R.string.download_path_key)
+            val previous = settings.getString(pathKey, null)
+            val directory = File(context.getExternalFilesDir(null), "hls-resume-check").apply { mkdirs() }
+            val id = -918260
+            val episode = DownloadObjects.DownloadEpisodeMetadata(id, id, "Saved episode",
+                "Fixture", null, null, 2, 3, TvType.TvSeries)
+            val name = getFileName(context, episode) + ".mp4"
+            val file = File(directory, name)
+            val link = newExtractorLink("Fixture", "HLS", "${server.origin}/legacy-hls.m3u8", ExtractorLinkType.M3U8) {
+                headers = mapOf("X-Fixture-Auth" to "selected")
+            }
+            try {
+                settings.edit().putString(pathKey, directory.absolutePath).commit()
+                instrumentation.context.assets.open("adaptive/legacy-hls.mp4").use { input -> file.outputStream().use { input.copyTo(it) } }
+                val originalDigest = digest(file)
+                val info = DownloadObjects.DownloadedFileInfo(file.length() + 1_000_000, "", name,
+                    extraInfo = "13", basePath = directory.absolutePath, linkHash = link.url.hashCode())
+                CloudStreamApp.setKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString(), info)
+                val result = VideoDownloadManager.downloadSingleEpisode(context, null, "", episode, link, { _, _ -> }, tryResume = true)
+                assertFalse("Saved segment index exceeds the new playlist", result.success)
+                assertFalse("Do not replace an incompatible partial file with another rendition", result.tryNext)
+                assertEquals(originalDigest, digest(file))
+                assertEquals(info, CloudStreamApp.getKey<DownloadObjects.DownloadedFileInfo>(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString()))
+                assertEquals(listOf("/legacy-hls.m3u8"), server.requests.toList())
+            } finally {
+                CloudStreamApp.removeKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString())
+                settings.edit().apply { if (previous == null) remove(pathKey) else putString(pathKey, previous) }.commit()
+                file.delete()
+                directory.delete()
+            }
+        }
     }
 
     @Test fun oldFilesAreCheckedByContentAndCompletedHlsRecordsUseActualSize() = runBlocking<Unit> {

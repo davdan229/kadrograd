@@ -186,12 +186,51 @@ dependencies {
             // Remove link loading notification""")
     text = replace_once(text, "} else if (currentLinks.isEmpty()) {", "} else if (candidates.isEmpty()) {")
     text = replace_once(text, "val sortedLinks = currentLinks.sortedBy", "val sortedLinks = candidates.sortedBy")
+    text = replace_once(text, """    /** The download only downloaded partial */
+    private val DOWNLOAD_PARTIAL_SUCCESS =
+        DownloadStatus(retrySame = true, tryNext = false, success = true)""",
+        """    /** Keep the partial file and retry the same rendition without marking it complete. */
+    private val DOWNLOAD_INCOMPLETE =
+        DownloadStatus(retrySame = true, tryNext = false, success = false)""")
+    text = replace_once(text, "            DOWNLOAD_PARTIAL_SUCCESS\n", "            DOWNLOAD_INCOMPLETE\n")
+    hls_playlist = """            // do the initial get request to fetch the segments
+            val m3u8 = M3u8Helper.M3u8Stream(
+                link.url, link.quality, link.headers.appendAndDontOverride(
+                    mapOf(
+                        "user-agent" to USER_AGENT,
+                    ) + if (link.referer.isNotBlank()) mapOf("referer" to link.referer) else emptyMap()
+                )
+            )
+
+            val items = M3u8Helper2.hslLazy(m3u8, selectBest = true, requireAudio = true)
+"""
+    if hls_playlist in text:
+        text = replace_once(text, """            // the start .ts index
+            var startAt = startIndex ?: 0
+""", hls_playlist.replace("// do the initial get request to fetch the segments",
+        "// Resolve the playlist before opening or replacing any existing file.") +
+        """            if (items.size <= 0) return@withContext DOWNLOAD_FAILED
+            if (startIndex != null && startIndex !in 0..items.size) return@withContext DOWNLOAD_INCOMPLETE
+            while (metadata.type == DownloadType.IsPaused) delay(100)
+            if (metadata.type == DownloadType.IsStopped) return@withContext DOWNLOAD_STOPPED
+            var startAt = startIndex ?: 0
+""")
+        text = text.replace(hls_playlist + "\n", "", 1)
     text = replace_once(text, """            metadata.type = DownloadType.IsDone
             return@withContext DOWNLOAD_SUCCESS
         } catch (t: Throwable) {
             logError(t)
             metadata.type = DownloadType.IsFailed
-            return@withContext metadata.failedStatus()""", """            // At EOF the number of bytes written is exact, including resumed segments.
+            return@withContext metadata.failedStatus()""", """            if (metadata.hlsWrittenProgress != items.size || metadata.bytesWritten <= 0) {
+                metadata.type = DownloadType.IsFailed
+                return@withContext metadata.failedStatus()
+            }
+            fileStream.close()
+            if (stream.file.lengthOrThrow() != metadata.bytesWritten) {
+                metadata.type = DownloadType.IsFailed
+                return@withContext metadata.failedStatus()
+            }
+            // At EOF the number of bytes written is exact, including resumed segments.
             metadata.totalBytes = metadata.bytesWritten
             metadata.bytesDownloaded = metadata.bytesWritten
             metadata.type = DownloadType.IsDone
