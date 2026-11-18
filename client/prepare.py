@@ -321,7 +321,9 @@ dependencies {
     changes[path] = text
 
     path = BASE + "ui/download/button/PieFetchButton.kt"
-    changes[path] = replace_once(changes[path], """        val isDone =
+    text = replace_once(changes[path], "                    if (progressPercentage < 98) {",
+        "                    if (status != DownloadStatusTell.IsDone) {")
+    changes[path] = replace_once(text, """        val isDone =
             newStatus == DownloadStatusTell.IsDone || (metadata.downloadedLength > 1024 && metadata.downloadedLength + 1024 >= metadata.totalLength)""",
         "        val isDone = newStatus == DownloadStatusTell.IsDone")
 

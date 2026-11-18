@@ -604,10 +604,13 @@ class AdaptiveDownloadTest {
                 override var mainUrl = server.origin
                 override val hasDownloadSupport = true
                 override val supportedTypes = setOf(TvType.TvSeries)
-                override suspend fun load(url: String): LoadResponse = newTvSeriesLoadResponse(
-                    "Batch fixture", url, TvType.TvSeries, (1..2).map { number ->
-                        newEpisode("episode-$number") { episode = number; season = 1 }
-                    })
+                override suspend fun load(url: String): LoadResponse {
+                    val selectedSeason = url.substringAfterLast('/').toInt()
+                    return newTvSeriesLoadResponse(
+                        "Batch fixture $selectedSeason", url, TvType.TvSeries, (1..2).map { number ->
+                            newEpisode("season-$selectedSeason-episode-$number") { episode = number; season = selectedSeason }
+                        })
+                }
 
                 override fun getVideoInterceptor(extractorLink: com.lagradost.cloudstream3.utils.ExtractorLink) =
                     selection(extractorLink.quality, if (extractorLink.name.contains("Studio B")) 4 else 3)
@@ -633,25 +636,35 @@ class AdaptiveDownloadTest {
                         while (!PluginManager.loadedOnlinePlugins || !PluginManager.loadedLocalPlugins) delay(100)
                     }
                     APIHolder.addPluginMapping(provider)
-                    scenario.onActivity { it.loadResult("${server.origin}/series", provider.name, "Batch fixture") }
-                    withTimeout(20_000) {
-                        while (true) {
-                            var ready = false
-                            scenario.onActivity { ready = it.findViewById<View>(R.id.result_batch_download_button)?.isShown == true }
-                            if (ready) break
-                            delay(100)
+                    val previousFiles = linkedMapOf<File, ByteArray>()
+                    for (season in listOf(2, 3)) {
+                        scenario.onActivity { it.loadResult("${server.origin}/series/$season", provider.name, "Batch fixture") }
+                        withTimeout(20_000) {
+                            while (true) {
+                                var ready = false
+                                scenario.onActivity { ready = it.findViewById<View>(R.id.result_batch_download_button)?.isShown == true &&
+                                    it.findViewById<TextView>(R.id.result_title)?.text?.toString() == "Batch fixture $season" }
+                                if (ready) break
+                                delay(100)
+                            }
                         }
+                        val requestsBeforeChoice = server.requests.size
+                        onView(withId(R.id.result_batch_download_button)).perform(click())
+                        onView(withText(R.string.yes)).inRoot(isDialog()).perform(click())
+                        revealChoice("Studio B · 1080")
+                        assertEquals(requestsBeforeChoice, server.requests.size)
+                        onView(allOf(withText(containsString("Studio B · 1080")), isCompletelyDisplayed())).inRoot(isDialog()).perform(click())
+                        withTimeout(60_000) { while (completed.distinct().size != (season - 1) * 2) delay(100) }
+                        val files = directory.walkTopDown().filter { it.isFile }.toList()
+                        assertEquals((season - 1) * 2, files.size)
+                        files.forEach { assertTracks(it, 1920, 1080) }
+                        previousFiles.forEach { (file, bytes) ->
+                            assertArrayEquals("The new season changed a saved episode", bytes,
+                                java.security.MessageDigest.getInstance("SHA-256").digest(file.readBytes()))
+                        }
+                        files.forEach { previousFiles[it] = java.security.MessageDigest.getInstance("SHA-256").digest(it.readBytes()) }
                     }
-                    onView(withId(R.id.result_batch_download_button)).perform(click())
-                    onView(withText(R.string.yes)).inRoot(isDialog()).perform(click())
-                    revealChoice("Studio B · 1080")
-                    assertTrue(server.requests.isEmpty())
-                    onView(allOf(withText(containsString("Studio B · 1080")), isCompletelyDisplayed())).inRoot(isDialog()).perform(click())
-                    withTimeout(60_000) { while (completed.distinct().size != 2) delay(100) }
-                    val files = directory.walkTopDown().filter { it.isFile }.toList()
-                    assertEquals(2, files.size)
-                    files.forEach { assertTracks(it, 1920, 1080) }
-                    assertEquals(2, server.requests.count { it.endsWith("/init-4.webm") })
+                    assertEquals(4, server.requests.count { it.endsWith("/init-4.webm") })
                     assertFalse(server.requests.any { it.endsWith("/init-3.webm") || it.endsWith("/init-5.webm") })
                 }
             } finally {

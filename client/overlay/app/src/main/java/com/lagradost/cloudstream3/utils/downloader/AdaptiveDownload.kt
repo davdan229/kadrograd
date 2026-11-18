@@ -159,7 +159,10 @@ object AdaptiveDownload {
                     if (count == C.RESULT_END_OF_INPUT && expected != C.LENGTH_UNSET.toLong() && received < expected) {
                         throw java.io.EOFException("Media response ended after $received of $expected bytes")
                     }
-                    if (count > 0) received += count
+                    if (count > 0) {
+                        received += count
+                        attempts = 0
+                    }
                     return count
                 } catch (error: IOException) {
                     val path = spec?.uri?.path.orEmpty()
