@@ -1,6 +1,8 @@
 package com.lagradost.cloudstream3
 
 import android.net.Uri
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.test.platform.app.InstrumentationRegistry
@@ -16,6 +18,7 @@ import com.lagradost.cloudstream3.utils.downloader.VideoDownloadManager
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Assert.*
 import org.junit.Test
 import java.io.File
@@ -31,6 +34,30 @@ class SavedMediaTest {
             while (true) { val count = input.read(buffer); if (count < 0) break; update(buffer, 0, count) }
         }
     }.digest().toList()
+
+    private fun describe(file: File): String {
+        val extractor = MediaExtractor()
+        return try {
+            extractor.setDataSource(file.absolutePath)
+            (0 until extractor.trackCount).joinToString { track ->
+                val format = extractor.getTrackFormat(track)
+                extractor.selectTrack(track)
+                extractor.seekTo(0, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+                val first = extractor.sampleTime
+                val duration = if (format.containsKey(MediaFormat.KEY_DURATION)) format.getLong(MediaFormat.KEY_DURATION) else 0
+                extractor.seekTo((duration - 2_000_000).coerceAtLeast(0), MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+                var last = -1L
+                var count = 0
+                while (extractor.sampleTime >= 0 && count++ < 4096) {
+                    last = extractor.sampleTime
+                    if (!extractor.advance()) break
+                }
+                extractor.unselectTrack(track)
+                "track=$track format=$format first=$first last=$last samples=$count"
+            }
+        } catch (error: Exception) { error.toString() }
+        finally { extractor.release() }
+    }
 
     @Test fun oldFilesAreCheckedByContentAndCompletedHlsRecordsUseActualSize() = runBlocking<Unit> {
         AdaptiveDownloadTest().FixtureServer().use { server ->
@@ -53,9 +80,11 @@ class SavedMediaTest {
                         val resume = DownloadObjects.DownloadResumePackage(DownloadObjects.DownloadItem("Fixture", "", episode, listOf(link)), 0)
                         CloudStreamApp.setKey(VideoDownloadManager.KEY_RESUME_PACKAGES, id.toString(), resume)
                         VideoDownloadManager.getDownloadFileInfo(context, id)
-                        withTimeout(20_000) {
+                        val verified = withTimeoutOrNull(15_000) {
                             while (CloudStreamApp.getKey<DownloadObjects.DownloadedFileInfo>(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString())?.completedBytes != length) delay(50)
+                            true
                         }
+                        assertEquals("Could not verify $asset, manifest requests=${server.requests}, ${if (verified != true) describe(file) else ""}", true, verified)
                         val repaired = checkNotNull(VideoDownloadManager.getDownloadFileInfo(context, id))
                         assertEquals(length, repaired.fileLength)
                         assertEquals(length, repaired.totalBytes)

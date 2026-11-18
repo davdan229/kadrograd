@@ -113,11 +113,25 @@ dependencies {
         "                onlineSource = onlineSource,\n                downloadedFile = downloadedFile,\n            )\n\n            event(PlayerAttachedEvent")
     text = replace_once(text, "\n            isPlaying = exo.isPlaying\n", "\n            isPlaying = exo.playWhenReady\n")
     text = replace_once(text, "\n                isPlaying = exo.isPlaying\n", "\n                isPlaying = exo.playWhenReady\n")
+    text = replace_once(text, "\n                        isPlaying = exo.isPlaying\n", "\n                        isPlaying = exo.playWhenReady\n")
+    text = replace_once(text, """        // we want autoplay because of TV and UX
+        isPlaying = autoPlay ?: isPlaying
+
+        // release the current exoplayer and cache
+        releasePlayer()""", """        // Releasing the old player emits pause callbacks. Preserve the intended state.
+        val playAfterSwitch = autoPlay ?: isPlaying
+        releasePlayer()
+        isPlaying = playAfterSwitch""")
+    text = replace_once(text, """            setPlayWhenReady(playWhenReady)
+            seekTo(currentWindow, playbackPosition)""", """            setPlayWhenReady(playWhenReady)
+            // Give the new timeline its start position together with the media source.""")
     text = replace_once(text, """        Log.i(TAG, "reloadPlayer")
 
         releasePlayer(false)""", """        Log.i(TAG, "reloadPlayer")
         saveData()
-        releasePlayer(false)""")
+        val playAfterReload = isPlaying
+        releasePlayer(false)
+        isPlaying = playAfterReload""")
     changes[path] = replace_once(text, "            loadExo(context, listOf(MediaItemSlice(mediaItem, Long.MIN_VALUE)), subSources)",
         "            loadExo(context, listOf(MediaItemSlice(mediaItem, Long.MIN_VALUE)), subSources, downloadedFile = true)")
 
@@ -195,6 +209,17 @@ dependencies {
                         extraInfo = if (isHLS) hlsWrittenProgress.toString() else null""")
     text = replace_once(text, "            if (isHLS || totalBytes == null) {",
         "            if (isHLS || totalBytes == null || internalType == DownloadType.IsDone) {")
+    text = replace_once(text, """    private suspend fun downloadSingleEpisode(""", """    internal suspend fun downloadSingleEpisode(""")
+    text = replace_once(text, """                    getDownloadResumePackage(context, info.ep.id)?.let { dpkg ->
+                        downloadFromResume(dpkg)""", """                    getDownloadResumePackage(context, info.ep.id)?.takeIf { previous ->
+                        // Resume only the exact stream and voice the user selected this time.
+                        val saved = previous.item.links.getOrNull(previous.linkIndex ?: 0)
+                        val selected = info.links.firstOrNull()
+                        saved != null && selected != null && saved.type == selected.type &&
+                            saved.url == selected.url && saved.extractorData == selected.extractorData &&
+                            saved.headers == selected.headers && saved.referer == selected.referer
+                    }?.let { dpkg ->
+                        downloadFromResume(dpkg)""")
     changes[path] = text
 
     path = BASE + "utils/downloader/DownloadObjects.kt"
@@ -225,6 +250,14 @@ dependencies {
             }
 
             if (newQueue.any()) {""")
+    text = replace_once(text, """        val isComplete = fileInfo != null &&
+                // Assure no division by 0
+                fileInfo.totalBytes > 0 &&
+                // If more than 98% downloaded then do not add to queue
+                (fileInfo.fileLength.toFloat() / fileInfo.totalBytes.toFloat()) > 0.98f""", """        val isComplete = fileInfo != null &&
+            (DownloadRecordRepair.status(downloadQueueWrapper.id, fileInfo.fileLength)?.let {
+                it == VideoDownloadManager.DownloadType.IsDone
+            } ?: (fileInfo.totalBytes > 0 && fileInfo.fileLength == fileInfo.totalBytes))""")
     changes[path] = replace_once(text, """        if (add(downloadQueueWrapper)) {""", """        DownloadRecovery.allowUserRequest(context)
         if (add(downloadQueueWrapper)) {""")
 
@@ -288,9 +321,9 @@ dependencies {
     changes[path] = text
 
     path = BASE + "ui/download/button/PieFetchButton.kt"
-    changes[path] = replace_once(changes[path], "(metadata.downloadedLength > 1024 && metadata.downloadedLength + 1024 >= metadata.totalLength)",
-        """(newStatus == null && metadata.totalLength > 0 &&
-                metadata.downloadedLength > 1024 && metadata.downloadedLength + 1024 >= metadata.totalLength)""")
+    changes[path] = replace_once(changes[path], """        val isDone =
+            newStatus == DownloadStatusTell.IsDone || (metadata.downloadedLength > 1024 && metadata.downloadedLength + 1024 >= metadata.totalLength)""",
+        "        val isDone = newStatus == DownloadStatusTell.IsDone")
 
     path = BASE + "ui/download/button/DownloadButton.kt"
     text = replace_once(changes[path], "            textView,\n            card,", "            textView ?: findViewById(R.id.result_movie_download_text_precentage),\n            card,")
@@ -384,7 +417,7 @@ dependencies {
                 links.links.map { txt("${it.name} ${Qualities.getStringByInt(it.quality)}") }""", """            val downloadChoices = com.lagradost.cloudstream3.utils.downloader.DownloadChoices
             val selected = if (forDownload) links.copy(links = downloadChoices.select(links.links)
                 .let { offers -> if (forBatch) offers.filter { downloadChoices.batchChoice(it) != null } else offers }) else links
-            if (forBatch && selected.links.isEmpty()) {
+            if (forDownload && selected.links.isEmpty()) {
                 showToast(R.string.no_links_found_toast, Toast.LENGTH_SHORT)
                 return@loadLinks
             }

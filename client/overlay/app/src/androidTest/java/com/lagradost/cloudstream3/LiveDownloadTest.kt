@@ -11,8 +11,10 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.lagradost.cloudstream3.APIHolder.getApiFromNameNull
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.downloader.AdaptiveDownload
+import com.lagradost.cloudstream3.utils.downloader.AdaptiveTransferCache
 import com.lagradost.cloudstream3.utils.downloader.DownloadChoices
+import com.lagradost.cloudstream3.utils.downloader.DownloadObjects
+import com.lagradost.cloudstream3.utils.downloader.VideoDownloadManager
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -27,7 +29,12 @@ class LiveDownloadTest {
         val context = instrumentation.targetContext
         val query = InstrumentationRegistry.getArguments().getString("movieQuery").orEmpty()
         require(query.isNotBlank()) { "movieQuery is required for the opt-in live transfer" }
-        val output = File(context.cacheDir, "live-download-${System.nanoTime()}.media")
+        val directory = File(context.getExternalFilesDir(null), "live-download-${System.nanoTime()}").apply { mkdirs() }
+        val id = -75184910
+        val preferences = PreferenceManager.getDefaultSharedPreferences(context)
+        val pathKey = context.getString(R.string.download_path_key)
+        val previousPath = preferences.getString(pathKey, null)
+        preferences.edit().putString(pathKey, directory.absolutePath).commit()
         var previousClient: okhttp3.OkHttpClient? = null
         try {
             context.getSharedPreferences("rebuild_preference", 0).edit().putString("HAS_DONE_SETUP", "true").commit()
@@ -62,23 +69,21 @@ class LiveDownloadTest {
                 val format = when (InstrumentationRegistry.getArguments().getString("movieFormat")) {
                     "dash" -> ExtractorLinkType.DASH
                     "hls" -> ExtractorLinkType.M3U8
+                    "mp4" -> ExtractorLinkType.VIDEO
                     else -> null
                 }
                 val selected = choices.firstOrNull { it.quality == height &&
-                    (format == null || it.type == format) &&
-                    it.type in setOf(ExtractorLinkType.DASH, ExtractorLinkType.M3U8) && provider.getVideoInterceptor(it) != null }
-                    ?: error("No selected adaptive quality $height; available=${choices.map { it.quality to it.type }}")
-                var lastLog = 0L
-                val exported = withTimeout(15 * 60_000L) {
-                    AdaptiveDownload.exportToFile(context, selected, output, provider.getVideoInterceptor(selected),
-                        progress = { percent, bytes, _ ->
-                            if (bytes - lastLog >= 25_000_000) {
-                                lastLog = bytes
-                                android.util.Log.i("KadrogradDownloadTest", "Live transfer: $percent%, $bytes bytes, output=${output.length()}")
-                            }
-                        })
+                    (if (format != null) it.type == format else it.type in setOf(ExtractorLinkType.DASH, ExtractorLinkType.M3U8)) }
+                    ?: error("No selected stream at $height; available=${choices.map { it.quality to it.type }}")
+                val episode = DownloadObjects.DownloadEpisodeMetadata(id, id, "Full transfer", provider.name,
+                    null, null, null, null, TvType.Movie)
+                val downloaded = withTimeout(15 * 60_000L) {
+                    VideoDownloadManager.downloadSingleEpisode(context, null, "", episode, selected, { _, _ -> })
                 }
-                assertTrue(exported)
+                assertTrue("Transfer did not finish", downloaded.success)
+                val saved = checkNotNull(VideoDownloadManager.getDownloadFileInfo(context, id))
+                assertEquals(saved.fileLength, saved.totalBytes)
+                val output = directory.walkTopDown().single { it.isFile && it.extension in setOf("mp4", "webm") }
                 assertTrue(output.length() > 10_000_000)
                 val extractor = MediaExtractor()
                 try {
@@ -114,14 +119,14 @@ class LiveDownloadTest {
                     }
                     instrumentation.runOnMainSync {
                         assertTrue(checkNotNull(player).isCurrentMediaItemSeekable)
-                        player!!.seekTo(player!!.duration * 3 / 4)
+                        player!!.seekTo((player!!.duration - 10_000).coerceAtLeast(0))
                     }
                     withTimeout(20_000) {
                         while (true) {
                             var ready = false
                             instrumentation.runOnMainSync {
                                 player?.playerError?.let { throw AssertionError("Saved movie seek failed", it) }
-                                ready = player?.playbackState == Player.STATE_READY && player!!.currentPosition > player!!.duration / 2
+                                ready = player?.playbackState == Player.STATE_READY && player!!.currentPosition >= player!!.duration - 15_000
                             }
                             if (ready) break
                             delay(100)
@@ -131,7 +136,10 @@ class LiveDownloadTest {
             }
         } finally {
             previousClient?.let { app.baseClient = it }
-            output.delete()
+            CloudStreamApp.removeKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString())
+            AdaptiveTransferCache.discard(context, id)
+            preferences.edit().apply { if (previousPath == null) remove(pathKey) else putString(pathKey, previousPath) }.commit()
+            directory.deleteRecursively()
         }
     }
 }

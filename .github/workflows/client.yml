@@ -40,10 +40,10 @@ on:
         default: '1080'
         type: string
       movie_format:
-        description: 'Adaptive protocol for the opt-in transfer'
+        description: 'Media format for the opt-in transfer'
         required: false
         type: choice
-        options: [auto, dash, hls]
+        options: [auto, dash, hls, mp4]
         default: auto
 permissions:
   contents: read

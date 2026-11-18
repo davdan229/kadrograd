@@ -223,7 +223,9 @@ internal object DownloadRecordRepair {
                 }
                 extractor.unselectTrack(track)
                 val sampleInterval = if (previousTime >= 0) (lastTime - previousTime).coerceIn(1, 1_000_000) else 100_000L
-                if (lastTime < endTime - sampleInterval - 100_000) return Probe(indexed, false)
+                // TS timestamps can include encoder preroll and playlist rounding.
+                val tolerance = if (expectedDuration != null) 500_000L else 100_000L
+                if (lastTime < endTime - sampleInterval - tolerance) return Probe(indexed, false)
             }
             Probe(indexed, true)
         } catch (_: Exception) { Probe(indexed, false) }

@@ -127,6 +127,11 @@ class AdaptiveDownloadTest {
 
     internal suspend fun playFromDownloadsOffline(expectedWidth: Int, expectedHeight: Int, titleText: String = "Download fixture") {
         val connectivity = context.getSystemService(ConnectivityManager::class.java)
+        val settings = PreferenceManager.getDefaultSharedPreferences(context)
+        val seekKey = context.getString(R.string.double_tap_seek_time_key)
+        val previousSeek = settings.getInt(seekKey, 10)
+        val hadSeekSetting = settings.contains(seekKey)
+        settings.edit().putInt(seekKey, 2).commit()
         try {
             shell("cmd connectivity airplane-mode enable")
             shell("svc wifi disable")
@@ -244,6 +249,7 @@ class AdaptiveDownloadTest {
                 assertNull(connectivity.activeNetwork)
             }
         } finally {
+            settings.edit().apply { if (hadSeekSetting) putInt(seekKey, previousSeek) else remove(seekKey) }.commit()
             // Closing a fullscreen activity can leave the emulator in landscape
             // until the next activity enters. Give the download picker a portrait display.
             shell("wm user-rotation lock 0")
@@ -414,7 +420,7 @@ class AdaptiveDownloadTest {
             preferences.edit().putString(pathKey, directory.absolutePath).putInt("app_layout_key", 0).commit()
             context.getSharedPreferences("rebuild_preference", 0).edit().putString("HAS_DONE_SETUP", "true").commit()
             val provider = object : MainAPI() {
-                override var name = "Movie download fixture"
+                override var name = "Movie download fixture ${System.nanoTime()}"
                 override var mainUrl = server.origin
                 override val hasDownloadSupport = true
                 override val supportedTypes = setOf(TvType.Movie)
@@ -475,6 +481,7 @@ class AdaptiveDownloadTest {
                         if (error != null) throw error
                         val visible = android.graphics.Rect()
                         view.getGlobalVisibleRect(visible)
+                        assertEquals("Expected every quality and voice in the chooser", 10, (view as android.widget.ListView).adapter.count)
                         android.util.Log.i("KadrogradDownloadTest", "Choice list height=${view.height}, visible=$visible, bottomPadding=${view.paddingBottom}")
                     }
                     // The movie button must show all choices before anything is queued.
@@ -747,7 +754,8 @@ class AdaptiveDownloadTest {
                     assertEquals("Previously saved segment was downloaded again", requestsBefore,
                         server.requests.count { it == alreadyFetched })
                     assertEquals(2, server.requests.count { it == "/$manifest" })
-                    assertTracks(final, 1920, 1080)
+                    if (type == ExtractorLinkType.M3U8) assertTracks(final, 1920, 1080, "video/avc", "audio/mp4a-latm")
+                    else assertTracks(final, 1920, 1080)
                 } finally {
                     first.delete()
                     final.delete()

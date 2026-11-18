@@ -112,7 +112,7 @@ if [ "$check_suite" != all ]; then
   grep -q "$expected" "$results/selected-instrumentation.txt" || status=1
   if [ "$check_suite" = ui ] && [ "$status" = 0 ]; then verify_offline_restart; fi
   if [ "$check_suite" = ui ] && [ "$status" = 0 ]; then verify_crash_recovery; fi
-  if [ "$check_suite" = ui ] && [ "$status" = 0 ] && [ -n "${KADROGRAD_MOVIE_QUERY:-}" ]; then verify_live_transfer; fi
+  if [ "$check_suite" = ui ] && [ -n "${KADROGRAD_MOVIE_QUERY:-}" ]; then verify_live_transfer; fi
   if [ "$status" != 0 ]; then
     timeout 10 adb shell dumpsys activity lastanr > "$results/last-anr.txt" 2>&1 || true
     timeout 10 adb shell dumpsys activity activities > "$results/activities.txt" 2>&1 || true
