@@ -1,8 +1,12 @@
 package com.lagradost.cloudstream3
 
-import android.media.MediaExtractor
-import android.media.MediaFormat
+import android.graphics.ImageFormat
+import android.media.ImageReader
+import android.os.Handler
+import android.os.Looper
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.preference.PreferenceManager
@@ -15,6 +19,7 @@ import com.lagradost.cloudstream3.utils.downloader.AdaptiveTransferCache
 import com.lagradost.cloudstream3.utils.downloader.DownloadChoices
 import com.lagradost.cloudstream3.utils.downloader.DownloadObjects
 import com.lagradost.cloudstream3.utils.downloader.VideoDownloadManager
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -30,6 +35,7 @@ class LiveDownloadTest {
         val query = InstrumentationRegistry.getArguments().getString("movieQuery").orEmpty()
         val sourceName = InstrumentationRegistry.getArguments().getString("sourceName").orEmpty().ifBlank { "Кадроград · Zona" }
         val episodeNumber = InstrumentationRegistry.getArguments().getString("episodeNumber")?.toIntOrNull()
+        val keepOnFailure = InstrumentationRegistry.getArguments().getString("keepOnFailure") == "true"
         require(query.isNotBlank()) { "movieQuery is required for the opt-in live transfer" }
         val directory = File(context.getExternalFilesDir(null), "live-download-${System.nanoTime()}").apply { mkdirs() }
         val id = -75184910
@@ -38,6 +44,7 @@ class LiveDownloadTest {
         val previousPath = preferences.getString(pathKey, null)
         preferences.edit().putString(pathKey, directory.absolutePath).commit()
         var previousClient: okhttp3.OkHttpClient? = null
+        var verified = false
         try {
             context.getSharedPreferences("rebuild_preference", 0).edit().putString("HAS_DONE_SETUP", "true").commit()
             PreferenceManager.getDefaultSharedPreferences(context).edit()
@@ -92,43 +99,43 @@ class LiveDownloadTest {
                 assertTrue("Transfer did not finish", downloaded.success)
                 val saved = checkNotNull(VideoDownloadManager.getDownloadFileInfo(context, id))
                 assertEquals(saved.fileLength, saved.totalBytes)
-                val output = directory.walkTopDown().single { it.isFile && it.extension in setOf("mp4", "webm") }
-                assertTrue(output.length() > 10_000_000)
-                val extractor = MediaExtractor()
-                try {
-                    extractor.setDataSource(output.absolutePath)
-                    val formats = (0 until extractor.trackCount).map(extractor::getTrackFormat)
-                    val video = formats.single { it.getString(MediaFormat.KEY_MIME)!!.startsWith("video/") }
-                    assertTrue(video.getLong(MediaFormat.KEY_DURATION) > (if (selectedEpisode == null) 60 else 15) * 60_000_000L)
-                    title.duration?.takeIf { it > 0 }?.let { minutes ->
-                        assertTrue("The saved movie ends before its catalog duration",
-                            video.getLong(MediaFormat.KEY_DURATION) >= (minutes - 3).coerceAtLeast(1) * 60_000_000L)
-                    }
-                    assertEquals(1, formats.count { it.getString(MediaFormat.KEY_MIME)!!.startsWith("audio/") })
-                    android.util.Log.i("KadrogradDownloadTest", "Completed full media: ${output.length()} bytes, duration=${video.getLong(MediaFormat.KEY_DURATION)}, resolution=${video.getInteger(MediaFormat.KEY_WIDTH)}x${video.getInteger(MediaFormat.KEY_HEIGHT)}")
-                } finally { extractor.release() }
+                assertTrue(saved.fileLength > 10_000_000)
+                android.util.Log.i("KadrogradDownloadTest", "Saved media bytes=${saved.fileLength}")
                 var player: ExoPlayer? = null
+                val reader = ImageReader.newInstance(1920, 1080, ImageFormat.PRIVATE, 3)
+                val rendered = CompletableDeferred<Unit>()
                 try {
                     instrumentation.runOnMainSync {
+                        reader.setOnImageAvailableListener({ it.acquireLatestImage()?.close() }, Handler(Looper.getMainLooper()))
                         player = ExoPlayer.Builder(context).build().apply {
-                            setMediaItem(MediaItem.fromUri(output.toURI().toString()))
+                            addListener(object : Player.Listener {
+                                override fun onRenderedFirstFrame() { rendered.complete(Unit) }
+                                override fun onPlayerError(error: PlaybackException) { rendered.completeExceptionally(error) }
+                            })
+                            setVideoSurface(reader.surface)
+                            setMediaItem(MediaItem.fromUri(saved.path))
                             prepare()
+                            play()
                         }
                     }
-                    withTimeout(20_000) {
-                        while (true) {
-                            var ready = false
-                            instrumentation.runOnMainSync {
-                                checkNotNull(player).playerError?.let { throw AssertionError("Saved movie failed", it) }
-                                ready = player?.playbackState == Player.STATE_READY
-                            }
-                            if (ready) break
-                            delay(100)
-                        }
-                    }
+                    withTimeout(30_000) { rendered.await() }
                     instrumentation.runOnMainSync {
-                        assertTrue(checkNotNull(player).isCurrentMediaItemSeekable)
-                        player!!.seekTo((player!!.duration - 10_000).coerceAtLeast(0))
+                        val exo = checkNotNull(player)
+                        exo.pause()
+                        assertTrue(exo.duration > (if (selectedEpisode == null) 60 else 15) * 60_000L)
+                        title.duration?.takeIf { it > 0 }?.let { minutes ->
+                            assertTrue("The saved movie ends before its catalog duration",
+                                exo.duration >= (minutes - 3).coerceAtLeast(1) * 60_000L)
+                        }
+                        val video = checkNotNull(exo.videoFormat) { "CloudStream could not read the saved video format" }
+                        assertEquals(1, exo.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }.sumOf { it.length })
+                        Regex("""(\d+)×(\d+)""").find(selected.name)?.destructured?.let { (width, height) ->
+                            assertEquals(width.toInt(), video.width)
+                            assertEquals(height.toInt(), video.height)
+                        }
+                        android.util.Log.i("KadrogradDownloadTest", "Completed full media: ${saved.fileLength} bytes, durationMs=${exo.duration}, resolution=${video.width}x${video.height}")
+                        assertTrue(exo.isCurrentMediaItemSeekable)
+                        exo.seekTo((exo.duration - 10_000).coerceAtLeast(0))
                     }
                     withTimeout(20_000) {
                         while (true) {
@@ -141,14 +148,18 @@ class LiveDownloadTest {
                             delay(100)
                         }
                     }
-                } finally { instrumentation.runOnMainSync { player?.release() } }
+                } finally {
+                    instrumentation.runOnMainSync { player?.release() }
+                    reader.close()
+                }
+                verified = true
             }
         } finally {
             previousClient?.let { app.baseClient = it }
             CloudStreamApp.removeKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString())
             AdaptiveTransferCache.discard(context, id)
             preferences.edit().apply { if (previousPath == null) remove(pathKey) else putString(pathKey, previousPath) }.commit()
-            directory.deleteRecursively()
+            if (verified || !keepOnFailure) directory.deleteRecursively()
         }
     }
 }
