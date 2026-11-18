@@ -117,10 +117,11 @@ class SourceInspectionCheck {
             .orEmpty().lineSequence().map(String::trim).filter(String::isNotEmpty).distinct().take(25).toList()
         assumeTrue("Set KADROGRAD_INSPECT_TITLE or KADROGRAD_INSPECT_TITLES to run source inspections", queries.isNotEmpty())
         val api = ZonaProvider("https://w1.zona.im")
+        val filmTypes = setOf(TvType.Movie, TvType.Cartoon, TvType.AnimeMovie)
         val failures = mutableListOf<String>()
         for (query in queries) {
             try {
-                val cards = api.search(query).filter { it.type == TvType.Movie && it.name.equals(query, ignoreCase = true) }
+                val cards = api.search(query).filter { it.type in filmTypes && it.name.equals(query, ignoreCase = true) }
                 assertTrue("No exact movie match for $query", cards.isNotEmpty())
                 for (card in cards) {
                     val movie = api.load(card.url) as MovieLoadResponse

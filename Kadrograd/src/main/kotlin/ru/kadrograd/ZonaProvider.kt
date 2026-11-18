@@ -48,8 +48,8 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
     private val nativeTracks by lazy { ZonaTracks({streamApiOrigins},ua) }
     override fun getVideoInterceptor(extractorLink: ExtractorLink): okhttp3.Interceptor? =
         ZonaTracks.context(extractorLink)?.let(ZonaTracks::interceptor)
-    private data class VerifiedStream(val stream: Stream, val uhd: ZonaTracks.Variant?) {
-        val quality get() = uhd?.playbackQuality ?: StreamTools.quality(stream.resolution).takeUnless { it >= 2160 } ?: 0
+    private data class VerifiedStream(val stream: Stream, val variant: ZonaTracks.Variant?) {
+        val quality get() = variant?.playbackQuality ?: StreamTools.quality(stream.resolution).takeUnless { it >= 2160 } ?: 0
     }
     private data class Playback(val direct: List<VerifiedStream>, val native: List<ZonaTracks.Found>)
     private fun escaped(value: String) = URLEncoder.encode(value, "UTF-8").replace("+", "%20")
@@ -337,9 +337,14 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         return found.flatMap { it.variants }.filter { it.isFourK }.distinct()
     }
     private suspend fun available(stream: Stream, ref: String,
-        onUhd: ((ZonaTracks.Variant) -> Unit)? = null, requireClearMedia: Boolean = false): Boolean {
+        onVariant: ((ZonaTracks.Variant) -> Unit)? = null, requireClearMedia: Boolean = false): Boolean {
         if (stream.trailer || !StreamTools.isHttp(stream.url) || Regex("/abuse_\\d+\\.mp4").containsMatchIn(stream.url)) return false
-        if (!URI(stream.url).path.endsWith(".m3u8")) return SourceHttp.accessibleMp4(stream.url, ref)
+        if (!URI(stream.url).path.endsWith(".m3u8")) {
+            val file = SourceHttp.probeMp4(stream.url, ref, headers)
+                ?: return SourceHttp.accessibleMp4(stream.url, ref)
+            file.variant?.let { onVariant?.invoke(it) }
+            return true
+        }
         return try {
             var url = stream.url
             repeat(3) {
@@ -349,12 +354,12 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
                 val next = URI(url).resolve(target).toString()
                 if (!StreamTools.isHttp(next)) return false
                 if (playlist.contains("#EXT-X-STREAM-INF:")) {
-                    if (onUhd != null) {
+                    if (onVariant != null) {
                         val variants = runCatching { ZonaHls.parse(playlist, url).videos }.getOrDefault(emptyList())
                         val uhd = variants.filter { it.variant.isFourK }.distinctBy { it.url }.take(2)
                             .firstOrNull { available(stream.copy(url = it.url), ref, requireClearMedia = true) }
                         if (uhd != null) {
-                            onUhd(uhd.variant)
+                            onVariant(uhd.variant)
                             return true
                         }
                         val lower = variants.firstOrNull { !it.variant.isFourK }
@@ -430,8 +435,8 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
                     candidates.take(24).forEach { stream ->
                         if (seen.add(stream.url) && remaining.getAndDecrement() > 0) launch {
                             limit.withPermit {
-                                var uhd: ZonaTracks.Variant? = null
-                                if (available(stream, ref, onUhd = { uhd = it })) readyDirect.add(VerifiedStream(stream, uhd))
+                                var variant: ZonaTracks.Variant? = null
+                                if (available(stream, ref, onVariant = { variant = it })) readyDirect.add(VerifiedStream(stream, variant))
                             }
                         }
                     }
@@ -441,7 +446,7 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         } ?: false
         val playback = Playback(readyDirect.sortedByDescending { it.quality },
             readyNative.sortedWith(compareBy<ZonaTracks.Found> { it.av1 }.thenBy { it.context.kind }))
-        badges.observe(ref,playback.native.flatMap { it.variants } + playback.direct.mapNotNull { it.uhd } + readyOpen.map { it.variant },
+        badges.observe(ref,playback.native.flatMap { it.variants } + playback.direct.mapNotNull { it.variant } + readyOpen.map { it.variant },
             playback.native.flatMap { it.context.voices.values } + playback.direct.map { it.stream.translation })
         if (playback.direct.isEmpty() && playback.native.isEmpty() && readyOpen.isEmpty()) {
             if (!completed) error("видеосерверы не ответили вовремя")
@@ -484,7 +489,7 @@ class ZonaProvider(baseUrl: String) : QualityProvider() {
         playback.direct.forEach { verified ->
             val stream = verified.stream
             val hls = URI(stream.url).path.endsWith(".m3u8")
-            val resolution = verified.uhd?.dimensions ?: stream.resolution.takeUnless { StreamTools.quality(it) >= 2160 }.orEmpty()
+            val resolution = verified.variant?.dimensions ?: stream.resolution.takeUnless { StreamTools.quality(it) >= 2160 }.orEmpty()
             callback(newExtractorLink(name, listOf("Zona", stream.translation, resolution, if (hls) "HLS" else "MP4").filter(String::isNotBlank).joinToString(" · "),
                 stream.url, if (hls) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO) {
                 referer = ref; quality = verified.quality; headers = this@ZonaProvider.headers

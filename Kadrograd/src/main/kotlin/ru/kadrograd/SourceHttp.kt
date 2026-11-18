@@ -158,4 +158,35 @@ internal object SourceHttp {
         }
     } catch (cancelled: CancellationException) { throw cancelled }
       catch (_: Exception) { false }
+
+    data class CheckedMp4(val variant: ZonaTracks.Variant?)
+
+    suspend fun probeMp4(url: String, referer: String, headers: Map<String, String>): CheckedMp4? {
+        val windowSize = 128 * 1024
+        suspend fun window(start: Long) = readEndpoint(url, headers + mapOf(
+            "Referer" to referer, "Range" to "bytes=$start-${start + windowSize - 1}"
+        ), timeoutSeconds = 3) { response ->
+            val range = response.header("Content-Range")
+            if (start != 0L && (response.code != 206 || range?.startsWith("bytes $start-") != true)) {
+                throw IOException("Unexpected media byte range")
+            }
+            val source = response.body.source()
+            source.request(windowSize.toLong())
+            val bytes = source.readByteArray(minOf(windowSize.toLong(), source.buffer.size))
+            bytes to range?.substringAfterLast('/')?.toLongOrNull()
+        }
+        return try {
+            val (head, total) = window(0)
+            if (head.size < 12 || String(head, 4, 4, Charsets.US_ASCII) != "ftyp") return null
+            val result = Mp4Dimensions.inspect(head)
+            val next = result.nextBox?.takeIf { total != null && it in 1L until total }
+            val variant = result.variant ?: next?.let {
+                try { Mp4Dimensions.inspect(window(it).first).variant }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { null }
+            }
+            CheckedMp4(variant)
+        } catch (cancelled: CancellationException) { throw cancelled }
+          catch (_: Exception) { null }
+    }
 }
