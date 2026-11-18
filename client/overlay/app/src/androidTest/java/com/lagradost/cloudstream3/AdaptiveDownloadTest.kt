@@ -222,7 +222,12 @@ class AdaptiveDownloadTest {
                         target = player.currentPosition + direction * 2_000L
                         assertTrue("Arrow test must seek within the clip", target in 1 until player.duration)
                     }
-                    onView(allOf(withId(button), isDisplayed())).perform(click())
+                    onView(allOf(withId(button), isDisplayed())).perform(GeneralClickAction(Tap.SINGLE, { view ->
+                        // The rewind icon is mirrored with scaleX=-1. Tap the painted bounds.
+                        val bounds = android.graphics.Rect()
+                        check(view.getGlobalVisibleRect(bounds))
+                        floatArrayOf(bounds.exactCenterX(), bounds.exactCenterY())
+                    }, Press.FINGER))
                     awaitOfflineSeek(offline, if (direction < 0) "rewind" else "fast forward", target, tolerance = 1_000)
                 }
                 assertNull(connectivity.activeNetwork)
@@ -464,6 +469,7 @@ class AdaptiveDownloadTest {
                     withTimeout(30_000) {
                         while (!PluginManager.loadedOnlinePlugins || !PluginManager.loadedLocalPlugins) delay(100)
                     }
+                    APIHolder.allProviders.add(provider)
                     APIHolder.addPluginMapping(provider)
                     scenario.onActivity { it.loadResult("${server.origin}/movie", provider.name, "Download fixture") }
                     withTimeout(20_000) {
@@ -570,6 +576,7 @@ class AdaptiveDownloadTest {
                     }
                     if (!keepCompletedFile) CloudStreamApp.removeKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString())
                 }
+                APIHolder.allProviders.remove(provider)
                 APIHolder.removePluginMapping(provider)
                 preferences.edit().apply { if (previous == null) remove(pathKey) else putString(pathKey, previous) }.commit()
                 if (!keepCompletedFile) directory.deleteRecursively()
@@ -636,6 +643,7 @@ class AdaptiveDownloadTest {
                     withTimeout(30_000) {
                         while (!PluginManager.loadedOnlinePlugins || !PluginManager.loadedLocalPlugins) delay(100)
                     }
+                    APIHolder.allProviders.add(provider)
                     APIHolder.addPluginMapping(provider)
                     val previousFiles = linkedMapOf<File, ByteArray>()
                     for (season in listOf(2, 3)) {
@@ -671,6 +679,7 @@ class AdaptiveDownloadTest {
             } finally {
                 VideoDownloadManager.downloadStatusEvent -= statusListener
                 completed.distinct().forEach { CloudStreamApp.removeKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, it.toString()) }
+                APIHolder.allProviders.remove(provider)
                 APIHolder.removePluginMapping(provider)
                 preferences.edit().apply { if (previous == null) remove(pathKey) else putString(pathKey, previous) }.commit()
                 directory.deleteRecursively()
