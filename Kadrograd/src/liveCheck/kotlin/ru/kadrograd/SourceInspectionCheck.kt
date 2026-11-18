@@ -179,6 +179,9 @@ class SourceInspectionCheck {
         var bytes = 0L
         for (track in tracks) {
             val representation = track.getElementsByTag("Representation").singleOrNull() ?: return@withContext null
+            if (track.attr("contentType") == "video") {
+                println("Full HD sample aspect ratio: ${representation.attr("sar").ifBlank { track.attr("sar") }.ifBlank { "unspecified" }}")
+            }
             val template = representation.getElementsByTag("SegmentTemplate").firstOrNull() ?: return@withContext null
             val media = template.attr("media").takeIf { it.contains("\$Number\$") } ?: return@withContext null
             val start = template.attr("startNumber").toIntOrNull() ?: 1
