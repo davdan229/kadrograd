@@ -319,9 +319,17 @@ object AdaptiveDownload {
             gate.cancel()
             try { transformer.cancel() }
             finally {
-                client.dispatcher.cancelAll()
-                client.connectionPool.evictAll()
-                client.dispatcher.executorService.shutdown()
+                // Closing a pooled TLS socket can write to the network.
+                withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) {
+                    try {
+                        client.dispatcher.cancelAll()
+                        client.connectionPool.evictAll()
+                    } catch (error: Exception) {
+                        logError(error)
+                    } finally {
+                        client.dispatcher.executorService.shutdown()
+                    }
+                }
             }
         }
     }
