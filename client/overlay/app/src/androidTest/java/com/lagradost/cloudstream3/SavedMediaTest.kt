@@ -97,6 +97,46 @@ class SavedMediaTest {
         }
     }
 
+    @Test fun interruptedDirectVideoResumesFromSavedBytes() = runBlocking<Unit> {
+        val path = "/voice-tracks.mp4"
+        AdaptiveDownloadTest().FixtureServer(disconnectOn = path, retryFailures = 2).use { server ->
+            val settings = PreferenceManager.getDefaultSharedPreferences(context)
+            val pathKey = context.getString(R.string.download_path_key)
+            val previous = settings.getString(pathKey, null)
+            val directory = File(context.getExternalFilesDir(null), "mp4-resume-check").apply { mkdirs() }
+            val id = -918261
+            val file = File(directory, "Direct video.mp4")
+            val original = instrumentation.context.assets.open("adaptive$path").use { it.readBytes() }
+            val link = newExtractorLink("Fixture", "Direct video", "${server.origin}$path", ExtractorLinkType.VIDEO) {
+                headers = mapOf("X-Fixture-Auth" to "selected")
+            }
+            try {
+                settings.edit().putString(pathKey, directory.absolutePath).commit()
+                val interrupted = VideoDownloadManager.downloadThing(context, link, "Direct video", "", "mp4",
+                    false, id, {}, parallelConnections = 1)
+                assertFalse("A truncated response was reported as complete", interrupted.success)
+                val offset = file.length()
+                assertTrue("The received bytes should survive", offset in 1L until original.size.toLong())
+                assertNull(CloudStreamApp.getKey<DownloadObjects.DownloadedFileInfo>(
+                    VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString())?.completedBytes)
+                server.ranges.clear()
+                val resumed = VideoDownloadManager.downloadThing(context, link, "Direct video", "", "mp4",
+                    true, id, {}, parallelConnections = 1)
+                assertTrue("Resuming the direct stream did not finish", resumed.success)
+                assertTrue("The downloader did not request the saved offset", (path to offset) in server.ranges)
+                assertArrayEquals(original, file.readBytes())
+                val saved = checkNotNull(VideoDownloadManager.getDownloadFileInfo(context, id))
+                assertEquals(original.size.toLong(), saved.fileLength)
+                assertEquals(saved.fileLength, saved.totalBytes)
+            } finally {
+                CloudStreamApp.removeKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString())
+                settings.edit().apply { if (previous == null) remove(pathKey) else putString(pathKey, previous) }.commit()
+                file.delete()
+                directory.delete()
+            }
+        }
+    }
+
     @Test fun oldFilesAreCheckedByContentAndCompletedHlsRecordsUseActualSize() = runBlocking<Unit> {
         AdaptiveDownloadTest().FixtureServer().use { server ->
             val directory = File(context.getExternalFilesDir(null), "saved-media-check").apply { mkdirs() }

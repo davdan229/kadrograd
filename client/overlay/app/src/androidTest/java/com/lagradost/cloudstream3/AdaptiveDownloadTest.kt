@@ -319,7 +319,8 @@ class AdaptiveDownloadTest {
                 executor.submit {
                     socket.use {
                         val reader = it.getInputStream().bufferedReader()
-                        val path = reader.readLine()?.split(' ')?.getOrNull(1)?.substringBefore('?') ?: return@use
+                        val request = reader.readLine()?.split(' ') ?: return@use
+                        val path = request.getOrNull(1)?.substringBefore('?') ?: return@use
                         val headers = mutableMapOf<String, String>()
                         while (true) {
                             val line = reader.readLine()?.takeIf(String::isNotEmpty) ?: break
@@ -345,9 +346,10 @@ class AdaptiveDownloadTest {
                         val contentRange = if (range != null && body.isNotEmpty()) "Content-Range: bytes $start-$end/${bytes!!.size}\r\n" else ""
                         val type = when { path.endsWith(".mpd") -> "application/dash+xml"; path.endsWith(".m3u8") -> "application/vnd.apple.mpegurl"; else -> "application/octet-stream" }
                         it.getOutputStream().apply {
-                            write("HTTP/1.1 $status\r\nContent-Type: $type\r\n$contentRange".toByteArray())
+                            write("HTTP/1.1 $status\r\nContent-Type: $type\r\nAccept-Ranges: bytes\r\n$contentRange".toByteArray())
                             write("Content-Length: ${body.size}\r\nConnection: close\r\n\r\n".toByteArray())
                             flush()
+                            if (request.firstOrNull() == "HEAD") return@use
                             beforeBody(path)
                             if (disconnectOn != null && start == 0 && body.size > 1 && path.contains(disconnectOn) && broken.compareAndSet(false, true)) {
                                 write(body, 0, body.size / 2)

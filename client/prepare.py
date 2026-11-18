@@ -193,6 +193,76 @@ dependencies {
     private val DOWNLOAD_INCOMPLETE =
         DownloadStatus(retrySame = true, tryNext = false, success = false)""")
     text = replace_once(text, "            DOWNLOAD_PARTIAL_SUCCESS\n", "            DOWNLOAD_INCOMPLETE\n")
+    text = replace_once(text, """        ): Long = withContext(Dispatchers.IO) {
+            var currentByte: Long = startByte
+            val stopAt = endByte ?: Long.MAX_VALUE
+            if (currentByte >= stopAt) return@withContext currentByte""", """        ): Pair<Long, Boolean> = withContext(Dispatchers.IO) {
+            var currentByte = startByte
+            val stopAt = endByte ?: Long.MAX_VALUE
+            if (currentByte >= stopAt) return@withContext currentByte to true""")
+    text = replace_once(text, '                    "Range" to "bytes=$startByte-" // ${endByte?.minus(1)?.toString() ?: "" }',
+        '                    "Range" to "bytes=$startByte-${endByte?.minus(1)?.toString().orEmpty()}"')
+    text = replace_once(text, """            val requestStream = request.body.byteStream()
+
+            var read: Int""", """            val matchingRange = request.code == 206 &&
+                request.headers["Content-Range"]?.trim()?.startsWith("bytes $startByte-", ignoreCase = true) == true
+            if (!matchingRange && !(startByte == 0L && request.code == 200)) {
+                request.okhttpResponse.close()
+                throw IOException("Invalid response for download offset $startByte (HTTP ${request.code})")
+            }
+            val requestStream = request.body.byteStream()
+
+            var read: Int
+            var endedNormally = false""")
+    text = replace_once(text, """                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                logError(t)
+            } finally {
+                requestStream.closeQuietly()
+            }
+
+            return@withContext currentByte""", """                }
+                endedNormally = true
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                logError(t)
+            } finally {
+                requestStream.closeQuietly()
+            }
+
+            return@withContext currentByte to endedNormally""")
+    text = replace_once(text, """            val end = chuckStartByte.getOrNull(index + 1)
+
+            for (i in 0 until retries) {
+                try {
+                    // in case
+                    start = resolve(start, end, buffer, callback)
+                    // no end defined, so we don't care exactly where it ended
+                    if (end == null) return true
+                    // we have download more or exactly what we needed
+                    if (start >= end) return true""", """            val end = chuckStartByte.getOrNull(index + 1) ?: totalLength
+
+            for (i in 0 until retries) {
+                try {
+                    val (nextByte, endedNormally) = resolve(start, end, buffer, callback)
+                    start = nextByte
+                    if ((end != null && start >= end) || (end == null && endedNormally)) return true""")
+    text = replace_once(text, """            metadata.type = DownloadType.IsDone
+            return@withContext DOWNLOAD_SUCCESS
+        } catch (e: IOException) {""", """            fileStream.close()
+            if (metadata.bytesWritten != metadata.bytesDownloaded ||
+                (items.totalLength != null && metadata.bytesWritten != items.totalLength) ||
+                stream.file.lengthOrThrow() != metadata.bytesWritten) {
+                metadata.type = DownloadType.IsFailed
+                return@withContext metadata.failedStatus()
+            }
+            metadata.totalBytes = metadata.bytesWritten
+            metadata.type = DownloadType.IsDone
+            return@withContext DOWNLOAD_SUCCESS
+        } catch (e: IOException) {""")
     hls_playlist = """            // do the initial get request to fetch the segments
             val m3u8 = M3u8Helper.M3u8Stream(
                 link.url, link.quality, link.headers.appendAndDontOverride(
