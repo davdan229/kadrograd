@@ -105,7 +105,7 @@ class LiveDownloadTest {
                             video.getLong(MediaFormat.KEY_DURATION) >= (minutes - 3).coerceAtLeast(1) * 60_000_000L)
                     }
                     assertEquals(1, formats.count { it.getString(MediaFormat.KEY_MIME)!!.startsWith("audio/") })
-                    android.util.Log.i("KadrogradDownloadTest", "Completed full movie: ${output.length()} bytes, duration=${video.getLong(MediaFormat.KEY_DURATION)}, height=${video.getInteger(MediaFormat.KEY_HEIGHT)}")
+                    android.util.Log.i("KadrogradDownloadTest", "Completed full media: ${output.length()} bytes, duration=${video.getLong(MediaFormat.KEY_DURATION)}, resolution=${video.getInteger(MediaFormat.KEY_WIDTH)}x${video.getInteger(MediaFormat.KEY_HEIGHT)}")
                 } finally { extractor.release() }
                 var player: ExoPlayer? = null
                 try {

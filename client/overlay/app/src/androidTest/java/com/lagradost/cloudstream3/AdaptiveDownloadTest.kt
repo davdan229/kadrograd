@@ -178,7 +178,7 @@ class AdaptiveDownloadTest {
                 }
                 val timeBarId = androidx.media3.ui.R.id.exo_progress
                 val timeBar = allOf(withId(timeBarId), isDisplayed())
-                for (fraction in listOf(0.6, 0.1, 0.85)) {
+                for (fraction in listOf(0.85, 0.1, 0.6)) {
                     var duration = 0L
                     var controlsVisible = false
                     offline.onActivity {
@@ -211,40 +211,19 @@ class AdaptiveDownloadTest {
                         floatArrayOf(position[0] + view.width * fraction.toFloat(), position[1] + view.height / 2f)
                     }, Press.FINGER))
                     val target = (duration * fraction).toLong()
-                    withTimeout(10_000) {
-                        while (true) {
-                            var reached = false
-                            offline.onActivity {
-                                val player = checkNotNull(it.findViewById<PlayerView>(R.id.player_view)?.player)
-                                player.playerError?.let { error -> throw AssertionError("Offline seeking failed", error) }
-                                reached = kotlin.math.abs(player.currentPosition - target) < duration / 6 &&
-                                    player.playbackState == androidx.media3.common.Player.STATE_READY
-                            }
-                            if (reached) break
-                            delay(50)
-                        }
-                    }
+                    awaitOfflineSeek(offline, "time bar", target, tolerance = duration / 6)
                 }
                 // The arrows must move the same offline timeline as the time bar.
                 for ((button, direction) in listOf(R.id.player_rew to -1, R.id.player_ffwd to 1)) {
-                    var before = 0L
+                    var target = 0L
                     offline.onActivity {
-                        before = checkNotNull(it.findViewById<PlayerView>(R.id.player_view)?.player).currentPosition
+                        val player = checkNotNull(it.findViewById<PlayerView>(R.id.player_view)?.player)
+                        assertFalse("Seeking resumed paused playback", player.playWhenReady)
+                        target = player.currentPosition + direction * 2_000L
+                        assertTrue("Arrow test must seek within the clip", target in 1 until player.duration)
                     }
                     onView(allOf(withId(button), isDisplayed())).perform(click())
-                    withTimeout(10_000) {
-                        while (true) {
-                            var moved = false
-                            offline.onActivity {
-                                val player = checkNotNull(it.findViewById<PlayerView>(R.id.player_view)?.player)
-                                player.playerError?.let { error -> throw AssertionError("Offline arrow seeking failed", error) }
-                                moved = (player.currentPosition - before) * direction > 500 &&
-                                    player.playbackState == androidx.media3.common.Player.STATE_READY
-                            }
-                            if (moved) break
-                            delay(50)
-                        }
-                    }
+                    awaitOfflineSeek(offline, if (direction < 0) "rewind" else "fast forward", target, tolerance = 1_000)
                 }
                 assertNull(connectivity.activeNetwork)
             }
@@ -257,6 +236,25 @@ class AdaptiveDownloadTest {
             shell("svc wifi enable")
             shell("svc data enable")
         }
+    }
+
+    private suspend fun awaitOfflineSeek(scenario: ActivityScenario<MainActivity>, control: String, target: Long, tolerance: Long) {
+        var position = -1L
+        var state = androidx.media3.common.Player.STATE_IDLE
+        val reached = kotlinx.coroutines.withTimeoutOrNull(10_000) {
+            do {
+                scenario.onActivity {
+                    val player = checkNotNull(it.findViewById<PlayerView>(R.id.player_view)?.player)
+                    player.playerError?.let { error -> throw AssertionError("Offline $control failed", error) }
+                    position = player.currentPosition
+                    state = player.playbackState
+                }
+                if (kotlin.math.abs(position - target) < tolerance && state == androidx.media3.common.Player.STATE_READY) break
+                delay(50)
+            } while (true)
+            true
+        }
+        assertEquals("Offline $control target=${target}ms, position=${position}ms, state=$state", true, reached)
     }
 
     @Test fun existingHlsDownloadCanBeScrubbedWithoutChangingTheFile() = runBlocking<Unit> {
@@ -471,7 +469,10 @@ class AdaptiveDownloadTest {
                     withTimeout(20_000) {
                         while (true) {
                             var ready = false
-                            scenario.onActivity { ready = it.findViewById<View>(R.id.download_movie_button)?.let { view -> view.isShown && view.isEnabled } == true }
+                            scenario.onActivity {
+                                ready = it.findViewById<View>(R.id.download_movie_button)?.let { view -> view.isShown && view.isEnabled } == true &&
+                                    it.findViewById<TextView>(R.id.result_title)?.text?.toString() == "Download fixture"
+                            }
                             if (ready) break
                             delay(100)
                         }

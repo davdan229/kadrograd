@@ -92,16 +92,21 @@ class SavedMediaTest {
                         assertEquals(originalDigest, digest(file))
                         // A playable prefix is not a completed movie or episode.
                         val partial = File(directory, "partial-$asset")
+                        val partialLength = if (index == 2) length / 376 * 188 else length / 2
                         file.inputStream().use { input -> partial.outputStream().use { output ->
-                            val bytes = ByteArray((length / 2).toInt()); input.read(bytes); output.write(bytes)
+                            val bytes = ByteArray(partialLength.toInt())
+                            java.io.DataInputStream(input).readFully(bytes)
+                            output.write(bytes)
                         } }
                         val partialInfo = info.copy(displayName = partial.name)
                         CloudStreamApp.setKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString(), partialInfo)
                         val result = DownloadRecordRepair.reconcile(context, id, partialInfo, Uri.fromFile(partial), partial.length())
                         if (index == 2) DownloadRecordRepair.verifyLegacyHls(context, id, partialInfo, Uri.fromFile(partial), partial.length())
                         assertNull(result.completedBytes)
+                        assertNull(CloudStreamApp.getKey<DownloadObjects.DownloadedFileInfo>(
+                            VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString())?.completedBytes)
                         assertNotEquals(VideoDownloadManager.DownloadType.IsDone, DownloadRecordRepair.status(id, partial.length()))
-                        assertEquals(length / 2, partial.length())
+                        assertEquals(partialLength, partial.length())
                         partial.delete()
                     } finally {
                         CloudStreamApp.removeKey(VideoDownloadManager.KEY_DOWNLOAD_INFO, id.toString())

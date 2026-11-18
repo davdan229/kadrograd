@@ -107,7 +107,9 @@ internal object DownloadRecordRepair {
             remember(id, info, uri, length, State.PARTIAL, false)
             return
         }
-        if (!inspect(context, uri, manifest.second).completeTail) return
+        // Android's TS extractor estimates duration from file length and may seek past
+        // the last sample in a padded recording. Compare the saved timestamps directly.
+        if (!TransportStreamExtent.matches(context, uri, length, manifest.second)) return
         val result = complete(context, id, info, uri, length)
         if (result.completedBytes == length) {
             VideoDownloadManager.downloadProgressEvent(Triple(id, length, length))
@@ -176,7 +178,7 @@ internal object DownloadRecordRepair {
     }
 
     private data class Probe(val indexed: Boolean, val completeTail: Boolean)
-    private fun inspect(context: Context, uri: Uri, expectedDuration: Long? = null): Probe {
+    private fun inspect(context: Context, uri: Uri): Probe {
         val extractor = MediaExtractor()
         var indexed = false
         return try {
@@ -188,6 +190,7 @@ internal object DownloadRecordRepair {
                 count >= 8 && (String(magic, 4, 4, Charsets.US_ASCII) == "ftyp" ||
                     magic.take(4) == listOf(0x1a.toByte(), 0x45.toByte(), 0xdf.toByte(), 0xa3.toByte()))
             } == true
+            if (!indexed) return Probe(false, false)
             extractor.setDataSource(context, uri, null)
             val formats = (0 until extractor.trackCount).map(extractor::getTrackFormat)
             val media = formats.indices.filter { formats[it].getString(MediaFormat.KEY_MIME)?.let { mime ->
@@ -197,7 +200,7 @@ internal object DownloadRecordRepair {
                 media.none { formats[it].getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true }) return Probe(indexed, false)
             for (track in media) {
                 val format = formats[track]
-                val duration = expectedDuration ?: if (format.containsKey(MediaFormat.KEY_DURATION)) format.getLong(MediaFormat.KEY_DURATION) else 0
+                val duration = if (format.containsKey(MediaFormat.KEY_DURATION)) format.getLong(MediaFormat.KEY_DURATION) else 0
                 if (duration <= 0) return Probe(indexed, false)
                 extractor.selectTrack(track)
                 extractor.seekTo(0, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
@@ -223,9 +226,7 @@ internal object DownloadRecordRepair {
                 }
                 extractor.unselectTrack(track)
                 val sampleInterval = if (previousTime >= 0) (lastTime - previousTime).coerceIn(1, 1_000_000) else 100_000L
-                // TS timestamps can include encoder preroll and playlist rounding.
-                val tolerance = if (expectedDuration != null) 500_000L else 100_000L
-                if (lastTime < endTime - sampleInterval - tolerance) return Probe(indexed, false)
+                if (lastTime < endTime - sampleInterval - 100_000L) return Probe(indexed, false)
             }
             Probe(indexed, true)
         } catch (_: Exception) { Probe(indexed, false) }
